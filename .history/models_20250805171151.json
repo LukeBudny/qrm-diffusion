@@ -1,0 +1,6 @@
+{
+"20250802_044702_transformer_5ep_rf_loss_lr5e-6_add_qt_clip_weight_0p25_sched_e00": "models/20250802_044702_transformer_5ep_rf_loss_lr5e-6_add_qt_clip_weight_0p25_sched/qrmmlp_joint_epoch_0.pth",
+"20250802_044702_transformer_5ep_rf_loss_lr5e-6_add_qt_clip_weight_0p25_sched_e01": "models/20250802_044702_transformer_5ep_rf_loss_lr5e-6_add_qt_clip_weight_0p25_sched/qrmmlp_joint_epoch_1.pth",
+"20250802_044702_transformer_5ep_rf_loss_lr5e-6_add_qt_clip_weight_0p25_sched_e05": "models/20250802_044702_transformer_5ep_rf_loss_lr5e-6_add_qt_clip_weight_0p25_sched/qrmmlp_joint_epoch_5.pth",
+}
+
