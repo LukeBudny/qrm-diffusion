@@ -1,10 +1,10 @@
 # QRM: Quality-Aware Modulation for Diffusion Transformers
 
 <p align="center">
-  <img src="experiments/comparative_parti_images/generate figure/grid_3x2.png" width="900">
+  <img src="grid_3x2.png" width="900">
 </p>
 
-**QRM** is a lightweight, reward-guided module that improves semantic alignment and visual quality of diffusion transformers by injecting **quality-aware modulation signals** during the denoising process, while keeping the backbone model fully frozen.
+**QRM** is a lightweight, reward-guided module that improves semantic alignment and visual quality of diffusion transformers by injecting quality-aware modulation signals during the denoising process, while keeping the backbone model fully frozen.
 
 ---
 
