@@ -1,8 +1,3 @@
-.sd3.5
-models/
-outputs/
-inputs/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -175,6 +170,8 @@ cython_debug/
 # ======================
 
 # ---- Model Weights / Checkpoints ----
+zimage-env
+Z-Image
 models/
 checkpoints/
 *.safetensors
@@ -205,14 +202,14 @@ outputs/
 *.gif
 *.mp4
 
-# ---- Logs & Run Artifacts ----
-*.log
-*.jsonl
-runs/
-wandb/
-mlruns/
-*.csv
-*.tsv
+# Outputs / experiments
+experiments/
+geneval/
+comparative_results/
+eval_scores/
+logs/
+mmcv/
+
 
 # ---- Python Cache / Temp Files ----
 __pycache__/
@@ -224,12 +221,16 @@ __pycache__/
 *.bak
 
 # ---- Virtual Environments ----
+sd3env/
+geneval-env/
 .venv/
-env/
-sd35-env/
 venv/
+env/
+conda/
 
-# ---- IDE / Editor Settings ----
+
+# Editor / history
+.history/
 .vscode/
 .idea/
 *.sublime-project
