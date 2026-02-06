@@ -1,9 +1,8 @@
 # qrm/__init__.py
 
 # Import core QRM components
-from .qrm_trainer import QRMTrainer
-from .qrm_dataloader import CachedCOCOIterable,COCOPromptDataset
-from .qrm_models import QRMMLP, QRMTransformer
+from .qrm_dataloader import CachedCOCOIterable
+from .qrm_models import QRMModulatorLatent, QRMModulatorLatentV2,QRMModulatorLatentV3,QRMModulatorLatentV4
 
 # Training-only utilities are imported lazily to avoid circular deps.
 def _trainer():
@@ -11,4 +10,4 @@ def _trainer():
     return QRMTrainer_batches
 
 # Define what is available when importing the QRM module
-__all__ = ["QRMTrainer","CachedCOCOIterable","COCOPromptDataset","QRMMLP","QRMTransformer"]
+__all__ = ["CachedCOCOIterable","QRMModulatorLatent","QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4"]

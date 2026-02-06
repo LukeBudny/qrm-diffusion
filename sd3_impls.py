@@ -17,6 +17,8 @@ from typing import Tuple
 from transformers import CLIPProcessor, CLIPModel
 from qrm.qrm_models import QRMRegistry
 import time
+import os
+
 
 #################################################################################################
 ### MMDiT Model Wrapping
@@ -75,8 +77,7 @@ class BaseModel(torch.nn.Module):
         control_model_ckpt=None,
         verbose=False,
         qrm_model_checkpoint = None,
-        qrm_type="mlp",
-        vision_dim = 512
+        qrm_type="QRMModulatorLatent",
     ):
         super().__init__()
         # Important configuration values can be quickly determined by checking shapes in the source file
@@ -87,6 +88,7 @@ class BaseModel(torch.nn.Module):
         pos_embed_max_size = round(math.sqrt(num_patches))
         adm_in_channels = file.get_tensor(f"{prefix}y_embedder.mlp.0.weight").shape[1]
         context_shape = file.get_tensor(f"{prefix}context_embedder.weight").shape
+        self._qrm_block_spans = None
 
         qk_norm = (
             "rms"
@@ -159,33 +161,157 @@ class BaseModel(torch.nn.Module):
                 device=device,
                 dtype=dtype,
             )         
-        
+        self.qrm_type =qrm_type 
         if qrm_type not in QRMRegistry:
             raise ValueError(f"Unknown QRM type: {qrm_type}")
-        self.qrm = QRMRegistry[qrm_type](vision_dim=vision_dim)
-        self.qrm.to(device=device)
+        if qrm_type in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
+            dm   = self.diffusion_model
+            dev  = next(dm.parameters()).device
+            dty  = next(dm.parameters()).dtype
+
+            # 1) Collect adaLN heads in a fixed order
+            adaln_modules = []
+            for jb in dm.joint_blocks:
+                adaln_modules.append(jb.context_block.adaLN_modulation)
+                adaln_modules.append(jb.x_block.adaLN_modulation)
+            adaln_modules.append(dm.final_layer.adaLN_modulation)
+            self._adaln_modules = adaln_modules
+
+            # 2) Compute spans once with a tiny dummy input (NO hooks yet)
+            hidden_size = dm.joint_blocks[0].x_block.adaLN_modulation[1].in_features
+            dummy_c     = torch.zeros(1, hidden_size, device=dev, dtype=dty)
+
+            spans, offset = [], 0
+            with torch.no_grad():
+                for mod in self._adaln_modules:
+                    m = mod(dummy_c).shape[1]
+                    spans.append((offset, offset + m))
+                    offset += m
+
+            # 3) Keep only the last K joint blocks + final
+            # print("#######################################################")
+            # print("Total adaLN blocks:", 2 * len(dm.joint_blocks) + 1)
+            num_blocks = 8 if qrm_type == "QRMModulatorLatentV3" else 49
+            K = min(num_blocks, len(dm.joint_blocks))        # tune K
+            keep_count = 2*K + 1                     # [context, x] per block + final
+            self._adaln_modules   = self._adaln_modules[-keep_count:]
+            self._qrm_block_spans = spans[-keep_count:]
+
+            # 4) Register hooks once; guard with a flag during collection
+            self._adaln_hooks = []
+            self._collecting_scale_shift = False
+            for mod, (s, e) in zip(self._adaln_modules, self._qrm_block_spans):
+                def _hook(mod, inputs, output, start=s, end=e, model_ref=self):
+                    # If we’re currently collecting baseline scale/shift, skip adding delta
+                    if getattr(model_ref, "_collecting_scale_shift", False):
+                        return output
+                    qd = getattr(model_ref, "qrm_delta", None)
+                    if qd is None:
+                        return output
+                    return output + qd[:, start:end]
+                self._adaln_hooks.append(mod.register_forward_hook(_hook))
+
+            # 5) Instantiate QRM with trimmed spans (once)
+            self.qrm = QRMRegistry[qrm_type](self._qrm_block_spans).to(device=dev, dtype=dty)
+        else:
+            self.qrm = QRMRegistry[qrm_type]()
+        self.qrm.to(device=device,dtype=dtype)
         self.qrm_model_checkpoint = qrm_model_checkpoint
 
-    def apply_model(self, x, sigma,t_raw=None, c_crossattn=None, y=None,vision_feature=None, skip_layers=[], controlnet_cond=None, q_t_training=False,**kwargs):
+
+    def apply_model(self, x, sigma,t_raw=None, c_crossattn=None, y=None, skip_layers=[], controlnet_cond=None, q_t_training=False,use_qrm = False,**kwargs):
+        qrm_time,sd35_time = [],[]
         dtype = next(self.diffusion_model.parameters()).dtype
-        if q_t_training:
-            timestep = t_raw.float()
-            B = y.shape[0]  # likely 2x original batch size due to CFG
+        dev   = next(self.diffusion_model.parameters()).device
+        start_time_qrm = time.time()
+        B = y.shape[0]
+        if not use_qrm and hasattr(self, "qrm_delta"):
+            self.qrm_delta = None
+        if not use_qrm:
+            q_t = None
+            timestep = self.model_sampling.timestep(sigma).float()
+        elif q_t_training:
+            timestep = self.model_sampling.timestep(sigma).to(next(self.qrm.parameters()).device)
             if t_raw.ndim == 1:
                 t_raw = t_raw.expand(B)
-            q_t = self.qrm(t_raw.float(), vision_feature.float(), y.float()).half().cuda() 
-            # print("q_t stats:", q_t.min().item(), q_t.max().item(), q_t.mean().item(), torch.isnan(q_t).any().item())
+            if kwargs.get("qrm_type",self.qrm_type) == "QRMModulatorLatent":
+                q_t = self.qrm(t_raw.float(), x.float(), y.float()).cuda()
+            elif kwargs.get("qrm_type", self.qrm_type) in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
+                t32 = t_raw.to(device=dev, dtype=torch.float32)
+                y32 = y.to(device=dev, dtype=torch.float32)
+                c_base32 = (self.diffusion_model.t_embedder(t32, dtype=torch.float32) +
+                            self.diffusion_model.y_embedder(y32))  # module outputs choose their own dtype; we force fp32 via inputs
+
+                with torch.no_grad():
+                    self._collecting_scale_shift = True
+                    D_all = self._qrm_block_spans[-1][1]
+                    scale_shift32 = torch.zeros(B, D_all, device=dev, dtype=torch.float32)
+                    for mod, (s, e) in zip(self._adaln_modules, self._qrm_block_spans):
+                        out = mod(c_base32)               # force fp32 inputs -> fp32 numerics inside LN/MLPs
+                        scale_shift32[:, s:e] = out.to(torch.float32)
+                    self._collecting_scale_shift = False
+
+                finite_mask = torch.isfinite(scale_shift32)
+                if not finite_mask.all():
+                    bad_count = (~finite_mask).sum().item()
+                    nan_count = torch.isnan(scale_shift32).sum().item()
+                    inf_count = torch.isinf(scale_shift32).sum().item()
+                    print(
+                        f"[diag] scale_shift anomalies: "
+                        f"bad={bad_count}, nan={nan_count}, inf={inf_count}, "
+                        f"min={scale_shift32.min().item()}, max={scale_shift32.max().item()}, "
+                        f"mean={scale_shift32.mean().item()}"
+                    )
+
+                qrm_in_x = x.to(dev, torch.float32).detach()
+                if kwargs.get("qrm_type", self.qrm_type) == "QRMModulatorLatentV2":
+                    qrm_delta32 = self.qrm(qrm_in_x, scale_shift32)
+                elif kwargs.get("qrm_type", self.qrm_type) in ["QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
+                    qrm_delta32 = self.qrm(qrm_in_x, scale_shift32,y.float(),timestep.float())
+                self.qrm_delta = qrm_delta32.to(dtype=dtype, device=dev)
+                q_t = None
+
         elif getattr(self, "qrm_inference", False):
-            timestep = self.model_sampling.timestep(sigma)
-            # print("DEBUG device check:")
-            # print("timestep:", timestep.device if torch.is_tensor(timestep) else type(timestep))
-            # print("vision_feature:", vision_feature.device if torch.is_tensor(vision_feature) else type(vision_feature))
-            # print("y:", y.device if torch.is_tensor(y) else type(y))
-            timestep = timestep.to(next(self.qrm.parameters()).device)
+            timestep = self.model_sampling.timestep(sigma).to(next(self.qrm.parameters()).device)
             y = y.to(next(self.qrm.parameters()).device)
-            vision_feature = vision_feature.to(next(self.qrm.parameters()).device)
-            q_t = self.qrm(timestep.float(), vision_feature.float(), y.float()).half().cuda() 
-            # print(f"[Timer] QRM forward: {time.time() - start:.2f}s")
+            if kwargs.get("qrm_type",self.qrm_type) == "QRMModulatorLatent":
+                t_raw = t_raw.expand(B)
+                q_t = self.qrm(t_raw.float(), x.float(), y.float()).cuda()
+            elif kwargs.get("qrm_type", self.qrm_type) in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
+                t32 = t_raw.to(device=dev, dtype=torch.float32)
+                y32 = y.to(device=dev, dtype=torch.float32)
+                c_base32 = (self.diffusion_model.t_embedder(t32, dtype=torch.float32) +
+                            self.diffusion_model.y_embedder(y32))  # module outputs choose their own dtype; we force fp32 via inputs
+
+                with torch.no_grad():
+                    self._collecting_scale_shift = True
+                    D_all = self._qrm_block_spans[-1][1]
+                    scale_shift32 = torch.zeros(B, D_all, device=dev, dtype=torch.float32)
+                    for mod, (s, e) in zip(self._adaln_modules, self._qrm_block_spans):
+                        out = mod(c_base32)               # force fp32 inputs -> fp32 numerics inside LN/MLPs
+                        scale_shift32[:, s:e] = out.to(torch.float32)
+                    self._collecting_scale_shift = False
+
+                finite_mask = torch.isfinite(scale_shift32)
+                if not finite_mask.all():
+                    bad_count = (~finite_mask).sum().item()
+                    nan_count = torch.isnan(scale_shift32).sum().item()
+                    inf_count = torch.isinf(scale_shift32).sum().item()
+                    print(
+                        f"[diag] scale_shift anomalies: "
+                        f"bad={bad_count}, nan={nan_count}, inf={inf_count}, "
+                        f"min={scale_shift32.min().item()}, max={scale_shift32.max().item()}, "
+                        f"mean={scale_shift32.mean().item()}"
+                    )
+
+                qrm_in_x = x.to(dev, torch.float32).detach()  
+                if kwargs.get("qrm_type", self.qrm_type) == "QRMModulatorLatentV2":
+                    qrm_delta32 = self.qrm(qrm_in_x, scale_shift32)
+                elif kwargs.get("qrm_type", self.qrm_type)in ["QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
+                    qrm_delta32 = self.qrm(qrm_in_x, scale_shift32,y.float(),timestep.float())
+
+                self.qrm_delta = qrm_delta32.to(dtype=dtype, device=dev)
+                q_t = None
         else:
             q_t = None
             timestep = self.model_sampling.timestep(sigma).float()
@@ -209,16 +335,14 @@ class BaseModel(torch.nn.Module):
             )
         x = x.to(next(self.diffusion_model.parameters()).dtype)
 
-        # print_param_dtypes(self.diffusion_model, name="DIFFUSION_MODEL")
-        # print("[DEBUG] input x dtype:", x.dtype)
-        # print("[DEBUG] input y dtype:", timestep.dtype)
-        # print("[DEBUG] input c_crossattn dtype:", c_crossattn.dtype)
-        # print("[DEBUG] input q_t dtype:", q_t.dtype)
+        if kwargs.get("qrm_type",self.qrm_type) in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
+            q_t = None
 
-        
+        qrm_time.append(time.time() - start_time_qrm)
+        start_time_sd35 = time.time()
         model_output,c,c2,c3 = self.diffusion_model(
             x.to(dtype),
-            timestep.to(x.device),                       # ensure timestep on same device
+            timestep.to(x.device),
             y=y,
             context=c_crossattn.to(dtype) if c_crossattn is not None else None,
             controlnet_hidden_states=controlnet_hidden_states,
@@ -227,8 +351,14 @@ class BaseModel(torch.nn.Module):
             **kwargs
         )
         model_output = model_output.float()
-        # print(f"[Timer] SD3 forward pass: {time.time() - start:.2f}s")
-        return self.model_sampling.calculate_denoised(sigma, model_output, x), q_t,c,c2,c3
+
+        if kwargs.get("qrm_type",self.qrm_type) in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"] and use_qrm:
+                c = scale_shift32
+                c2 = scale_shift32 + self.qrm_delta
+                c3 = self.qrm_delta
+        sd35_time.append(time.time() - start_time_sd35)
+        return self.model_sampling.calculate_denoised(sigma, model_output, x),c,c2,c3,qrm_time,sd35_time
+        
 
     def forward(self, *args, **kwargs):
         return self.apply_model(*args, **kwargs)
@@ -251,29 +381,23 @@ class CFGDenoiser(torch.nn.Module):
         cond,
         uncond,
         cond_scale,
-        vision_feature,
-        uncond_vision_feature,
+        use_qrm = False,
         **kwargs,
     ):
         
-        if vision_feature is not None and uncond_vision_feature is not None:
-            vision_feature = torch.cat([vision_feature, uncond_vision_feature])
-        else:
-            vision_feature = None
-
         
-        batched,q_t,c,c2,c3 = self.model.apply_model(
+        batched,c,c2,c3,qrm_time,sd35_time = self.model.apply_model(
             torch.cat([x, x]),
             torch.cat([timestep, timestep]),
             c_crossattn=torch.cat([cond["c_crossattn"], uncond["c_crossattn"]]),
             y=torch.cat([cond["y"], uncond["y"]]),
-            vision_feature = vision_feature,
+            use_qrm = use_qrm,
             **kwargs,
         )
         # Then split and apply CFG Scaling
         pos_out, neg_out = batched.chunk(2)
         scaled = neg_out + (pos_out - neg_out) * cond_scale
-        return scaled,q_t,c,c2,c3
+        return scaled,c,c2,c3,qrm_time,sd35_time
 
 
 class SkipLayerCFGDenoiser(torch.nn.Module):
@@ -296,14 +420,9 @@ class SkipLayerCFGDenoiser(torch.nn.Module):
         cond,
         uncond,
         cond_scale,
-        vision_feature,
-        uncond_vision_feature,
+        use_qrm = False,
         **kwargs,
     ):
-        if vision_feature is not None and uncond_vision_feature is not None:
-            vision_feature_cat = torch.cat([vision_feature, uncond_vision_feature])
-        else:
-            vision_feature_cat = None
 
         # Run cond and uncond in a batch together
         batched = self.model.apply_model(
@@ -311,7 +430,7 @@ class SkipLayerCFGDenoiser(torch.nn.Module):
             torch.cat([timestep, timestep]),
             c_crossattn=torch.cat([cond["c_crossattn"], uncond["c_crossattn"]]),
             y=torch.cat([cond["y"], uncond["y"]]),
-            vision_feature = vision_feature_cat,
+            use_qrm = use_qrm,
             **kwargs,
         )
         # Then split and apply CFG Scaling
@@ -328,7 +447,6 @@ class SkipLayerCFGDenoiser(torch.nn.Module):
                 timestep,
                 c_crossattn=cond["c_crossattn"],
                 y=cond["y"],
-                vision_feature = vision_feature,
                 skip_layers=self.skip_layers,
             )
             # Then scale acc to skip layer guidance
@@ -407,19 +525,15 @@ def sample_euler(model, x, sigmas, extra_args=None):
     """Implements Algorithm 2 (Euler steps) from Karras et al. (2022)."""
     extra_args = {} if extra_args is None else extra_args
     s_in = x.new_ones([x.shape[0]])
-    prompt = extra_args.get("prompt", None)
     for i in tqdm(range(len(sigmas) - 1)):
         sigma_hat = sigmas[i]
-        if "dynamic_vision_fn" in extra_args:
-            extra_args["vision_feature"] = extra_args["dynamic_vision_fn"](x, prompt)
-
-        denoised = model(x, sigmas[i] * s_in, **extra_args)
-
+        denoised = model(x, sigma_hat * s_in, **extra_args)
         d = to_d(x, sigma_hat, denoised)
         dt = sigmas[i + 1] - sigma_hat
         # Euler method
         x = x + d * dt
     return x
+
 
 
 # @torch.no_grad()
@@ -447,48 +561,41 @@ def sample_euler(model, x, sigmas, extra_args=None):
 
 @torch.no_grad()
 @torch.autocast("cuda", dtype=torch.float16)
-def sample_dpmpp_2m(model, x, sigmas,text_inputs, extra_args=None):
+def sample_dpmpp_2m(model, x, sigmas, text_inputs=None, use_qrm=False, extra_args=None):
     extra_args = {} if extra_args is None else extra_args
-    s_in  = x.new_ones([x.shape[0]])                 # [B]
+    s_in  = x.new_ones([x.shape[0]])  # [B]
     sigma_fn = lambda t: t.neg().exp()
     t_fn     = lambda sigma: sigma.log().neg()
     old_denoised = None
     B = x.shape[0]
+    qrm_start_step = extra_args.get("qrm_start_step", 25)
+    qrm_end_step = extra_args.get("qrm_end_step", 47)
+    sampler_time = []
+
     for i in tqdm(range(len(sigmas) - 1), leave=False):
-        # --- prepare step-specific arguments --------------------------------
-        t_raw = t_fn(sigmas[i]).expand(B).to(dtype=torch.float32,
-                                             device=x.device)
+        # per-step raw time (float32 for stability)
+        t_raw = t_fn(sigmas[i]).expand(B).to(dtype=torch.float32, device=x.device)
+        
+        use_qrm_step = bool(use_qrm) and (i >= qrm_start_step) and (i <= qrm_end_step)
 
-        vis_fn = extra_args.get("dynamic_vision_fn", None)
-        if callable(vis_fn):
-            prompt   = extra_args.get("prompt", None)
-            unprompt = extra_args.get("uncond_prompt", [""] * B)
-            if isinstance(prompt, str):
-                prompt = [prompt]
-            if isinstance(unprompt, str):
-                unprompt = [unprompt]
-            all_prompts = prompt + unprompt
-            features = vis_fn(x.repeat(2, 1, 1, 1), all_prompts,text_inputs)
-            extra_args["vision_feature"], extra_args["uncond_vision_feature"] = features.chunk(2)
+        # strip helper keys; keep only what the UNet expects
+        clean_args = {k: v for k, v in extra_args.items()
+                      if k not in ("prompt", "uncond_prompt")}
 
-        # strip helper keys so the UNet sees only what it expects
-        clean_args = {k: v for k, v in extra_args.items() if k not in ("dynamic_vision_fn", "prompt", "uncond_prompt")}
-
-        # ensure conditioning is on the same device as x (CUDA)
+        # move cond to device
         for key in ("cond", "uncond"):
-            if key in clean_args:
+            if key in clean_args and isinstance(clean_args[key], dict):
                 for sub in ("c_crossattn", "y"):
-                    clean_args[key][sub] = clean_args[key][sub].to(x.device)
+                    if sub in clean_args[key] and clean_args[key][sub] is not None:
+                        clean_args[key][sub] = clean_args[key][sub].to(x.device)
 
-        # ensure required keys exist, even for baseline runs
-        clean_args.setdefault("vision_feature",        None)
-        clean_args.setdefault("uncond_vision_feature", None)
-
-        # --- denoise --------------------------------------------------------
-        out,_,c,c2,c3 = model(x, sigmas[i] * s_in, t_raw=t_raw, **clean_args)
+        # --- denoise (QRM on/off per step) ---
+        out, c, c2, c3,qrm_time,sd35_time = model(x, sigmas[i] * s_in, t_raw=t_raw, use_qrm=use_qrm_step, **clean_args)
+        start_time_sampler = time.time()
         denoised = out[0] if isinstance(out, (tuple, list)) else out
-        # --- DPM-Solver++(2M) update ----------------------------------------
-        t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])      # scalars
+
+        # --- DPM++(2M) update ---
+        t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])
         h = t_next - t
 
         if old_denoised is None or sigmas[i + 1] == 0:
@@ -496,139 +603,201 @@ def sample_dpmpp_2m(model, x, sigmas,text_inputs, extra_args=None):
         else:
             h_last = t - t_fn(sigmas[i - 1])
             r = h_last / h
-            denoised_d = (1 + 1 / (2 * r)) * denoised - (1 / (2 * r)) * old_denoised
+            denoised_d = (1 + 1/(2*r)) * denoised - (1/(2*r)) * old_denoised
             x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * denoised_d
 
         old_denoised = denoised
 
-        #     for i in tqdm(range(len(sigmas) - 1)):
-#         denoised = model(x, sigmas[i] * s_in, **extra_args)
-#         t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])
-#         h = t_next - t
-#         if old_denoised is None or sigmas[i + 1] == 0:
-#             x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * denoised
-#         else:
-#             h_last = t - t_fn(sigmas[i - 1])
-#             r = h_last / h
-#             denoised_d = (1 + 1 / (2 * r)) * denoised - (1 / (2 * r)) * old_denoised
-#             x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * denoised_d
-#         old_denoised = denoised
-
-
+        # optional per-step save
+        step_num = i + 1
+        is_last  = (i == len(sigmas) - 2)
+        if bool(extra_args.get("save_per_5_step", False)) and ((step_num % 5 == 0) or is_last):
+            save_and_decode_x(
+                x,
+                extra_args.get("per_step_dir", None),
+                extra_args.get("vae_decode", None),
+                extra_args.get("process_out", None),
+                step_num
+            )
+        sampler_time.append(time.time() - start_time_sampler)
+    
+    # print("time spent on qrm: ", sum(qrm_time),"time spent on sd35: ", sum(sd35_time),"time spent on sampler: ", sum(sampler_time))
     return x
 
-def sample_dpmpp_2m_qrm(model, x, sigmas, text_inputs, extra_args=None,num_selected_steps = 1,lora_only = False):
-    """DPM-Solver++(2M)."""
+def save_and_decode_x(latents,per_step_dir,vae_decode,process_out,step_idx: int,):
+    """
+    Decode current latents and save a PNG named {step_idx:03d}.png in per_step_dir.
+    Assumes batch=1; extend as needed for larger batches.
+    """
+    os.makedirs(per_step_dir, exist_ok=True)
+    latents = process_out(latents)
+    # If your decode function expects fp16/cuda, just pass latents through.
+    # If it needs fp32/cpu, you could do: latents.float().to('cpu') instead.
+    img = vae_decode(latents)  # should return a PIL.Image or list of PIL.Image
+    if isinstance(img, (list, tuple)):
+        img = img[0]
+    out_path = os.path.join(per_step_dir, f"{step_idx:03d}.png")
+    img.save(out_path)
 
-    extra_args = {} if extra_args is None else extra_args
-    s_in = x.new_ones([x.shape[0]])
+def sample_qrm_one_step(model, sigmas_schedule, text_inputs, 
+                        extra_args=None, num_selected_steps=1, 
+                        step_indices=None, fixed_noise=None, 
+                        loss_type="margin_seeking",
+                        sampler: str = "dpmpp2m"):  # ← NEW: choose "dpmpp2m" or "euler"
+    assert num_selected_steps == 1
+    device = "cuda"
+    latent_tmpl = torch.empty((1, 16, 64, 64), device=device)
+    extra_args = {} if extra_args is None else dict(extra_args)
+    B = latent_tmpl.shape[0]
+    sigmas = sigmas_schedule.to(device)
+
+    if step_indices is None or (torch.is_tensor(step_indices) and step_indices.numel() == 0) or (isinstance(step_indices, (list, tuple)) and len(step_indices) == 0):
+        raise ValueError("step_indices must be provided (single index for RF one-step)")
+    if torch.is_tensor(step_indices):
+        step_indices = step_indices.tolist()
+
+    idx = int(step_indices[0])
+
+    # --- init from pure noise at sigma_max ----------------------------------
+    noise = fixed_noise if fixed_noise is not None else torch.randn_like(latent_tmpl)
+    x = noise * sigmas[0].view(1, 1, 1, 1)  # start at highest noise
+    x_qrm = x.clone()  
+
+    s_in = torch.ones(B, device=device)
+
+    @torch.no_grad()
+    def fwd_base(x_in, sigma_scalar):
+        with torch.autocast("cuda"):
+            den, _, _, _ = model(
+                x_in, sigma_scalar * s_in, use_qrm=False,
+                **{k: v for k, v in extra_args.items() if k not in ("prompt", "uncond_prompt")}
+            )
+        return den  # fp16
+
+    def fwd_qrm(x_in, sigma_scalar, need_stats: bool):
+        t_raw = (-sigma_scalar.log()).expand(B)
+        with torch.autocast("cuda"):
+            den, c, c2, c3,qrm_time,sd35_time = model(
+                x_in, sigma_scalar * s_in, t_raw=t_raw, use_qrm=True,
+                **{k: v for k, v in extra_args.items() if k not in ("prompt", "uncond_prompt")}
+            )
+        if need_stats:
+            return den, c, c2, c3, t_raw
+        else:
+            return den, None, None, None, t_raw
+
+    # === DPM++(2M) helpers ===================================================
     sigma_fn = lambda t: t.neg().exp()
-    t_fn = lambda sigma: sigma.log().neg()
-    old_denoised = None
-    B = x.shape[0]
-    step_indices = torch.randperm(len(sigmas) - 1)[:num_selected_steps].tolist()
-    guided_out_list,q_t_out_list,x_t_list, sigma_list = [],[],[],[]
-   
-    for i in tqdm(range(len(sigmas) - 1)):
-        t = t_fn(sigmas[i]).expand(B).to(dtype=torch.float32, device=x.device)
+    t_fn     = lambda sigma: sigma.log().neg()
 
-        vis_fn = extra_args.get("dynamic_vision_fn", None)
-        if callable(vis_fn):
-            prompt   = extra_args.get("prompt", None)
-            unprompt = extra_args.get("uncond_prompt", [""] * B)
-            if isinstance(prompt, str):
-                prompt = [prompt]
-            if isinstance(unprompt, str):
-                unprompt = [unprompt]
-            all_prompts = prompt + unprompt
-            features = vis_fn(x.repeat(2, 1, 1, 1), all_prompts,text_inputs)
-            extra_args["vision_feature"], extra_args["uncond_vision_feature"] = features.chunk(2)
+    # ---------- BASELINE roll to idx ----------
+    if loss_type == "margin_seeking":
+        old_denoised = None
+        for i in range(0, idx + 1):
+            den_i = fwd_base(x, sigmas[i].view(B))  # fp16, no grad
 
-        # strip helper keys so the UNet sees only what it expects
-        clean_args = {k: v for k, v in extra_args.items() if k not in ("dynamic_vision_fn", "prompt", "uncond_prompt")}
-
-        t_expanded = t_fn(sigmas[i]).expand(B).to(dtype=torch.float32, device=x.device)
-
-        if i in step_indices:
-            sigma_t = sigmas[i].view(1, 1, 1, 1).expand(B, 1, 1, 1)
-
-            if lora_only:
-                with torch.cuda.amp.autocast(enabled=False):
-                    denoised, q_t,c,c2,c3 = model(x, sigmas[i] * s_in, t_raw=t_expanded, **clean_args)
+            if sampler.lower() == "euler":
+                # Euler: x <- x + d * dt
+                d  = to_d(x, sigmas[i], den_i)  # uses your existing helper
+                dt = sigmas[i + 1] - sigmas[i]
+                x  = x + d * dt
             else:
-                # with torch.cuda.amp.autocast(dtype=torch.float16):
-                    denoised, q_t,c,c2,c3 = model(x, sigmas[i] * s_in, t_raw=t_expanded, **clean_args)
-            x_t_list.append(x.clone())
-            sigma_list.append(sigma_t.clone())
-            guided_out_list.append(denoised)
-            q_t_out_list.append(q_t)
-        else:
-            with torch.no_grad():
-                denoised, _,c,c2,c3 = model(x, sigmas[i] * s_in, t_raw=t_expanded, **clean_args)
+                # DPM++(2M) (unchanged)
+                t      = t_fn(sigmas[i])
+                t_next = t_fn(sigmas[i + 1])
+                h = t_next - t
+                if old_denoised is None or sigmas[i + 1] == 0:
+                    x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * den_i
+                else:
+                    h_last = t - t_fn(sigmas[i - 1])
+                    r = h_last / h
+                    den_d = (1 + 1/(2*r)) * den_i - (1/(2*r)) * old_denoised
+                    x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * den_d
+                    del den_d
 
-        # DPM++ update
-        t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])
-        h = t_next - t
-        current_denoised = denoised if i in step_indices else denoised.detach()
+            old_denoised = den_i
 
-        if old_denoised is None or sigmas[i + 1] == 0:
-            x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * current_denoised
-        else:
-            h_last = t - t_fn(sigmas[i - 1])
-            r = h_last / h
-            denoised_d = (1 + 1 / (2 * r)) * current_denoised - (1 / (2 * r)) * old_denoised
-            x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * denoised_d
+        x_k_baseline = x.detach()
 
-        old_denoised = current_denoised.detach()
+    # ---------- QRM roll to idx (no grad until idx) ----------
+    old_denoised_qrm = None
+    den_for_qrm_qrm  = None
+    for i in range(0, idx + 1):
+        with torch.no_grad():
+            den_i_qrm, _, _, _, _ = fwd_qrm(x_qrm, sigmas[i].view(B), need_stats=False)
 
-        if num_selected_steps == 1 and len(guided_out_list) == 1:
-            break
+            if sampler.lower() == "euler":
+                d  = to_d(x_qrm, sigmas[i], den_i_qrm)
+                dt = sigmas[i + 1] - sigmas[i]
+                x_qrm = x_qrm + d * dt
+            else:
+                t      = t_fn(sigmas[i])
+                t_next = t_fn(sigmas[i + 1])
+                h = t_next - t
+                if old_denoised_qrm is None or sigmas[i + 1] == 0:
+                    x_qrm = (sigma_fn(t_next) / sigma_fn(t)) * x_qrm - (-h).expm1() * den_i_qrm
+                else:
+                    h_last = t - t_fn(sigmas[i - 1])
+                    r = h_last / h
+                    den_d_qrm = (1 + 1/(2*r)) * den_i_qrm - (1/(2*r)) * old_denoised_qrm
+                    x_qrm = (sigma_fn(t_next) / sigma_fn(t)) * x_qrm - (-h).expm1() * den_d_qrm
+                    del den_d_qrm
 
-    return guided_out_list, q_t_out_list, x_t_list, sigma_list,t_expanded,c,c2,c3
+            if i == idx - 1:
+                x_pre_k_qrm     = x_qrm.detach()
+                den_for_qrm_qrm = den_i_qrm
 
-def sample_qrm_one_step(model, x, sigmas_dummy,text_inputs, extra_args=None, num_selected_steps=1, lora_only=False):
-    """Rectified Flow one-step sampling. Matches sample_dpmpp_2m_qrm interface."""
-    assert num_selected_steps == 1, "RF-style training only supports one-step sampling"
+            old_denoised_qrm = den_i_qrm
 
-    extra_args = {} if extra_args is None else extra_args
-    B = x.shape[0]
-    device = x.device
+    # --- states at k ----------------------------------------------------------
+    sigma_t = sigmas[idx].view(B)
 
-    # Sample time t ~ mode-biased, then σ = exp(-t)
-    u = torch.rand(B, device=device)
-    t = (1 + 1.0) * u / (u + 1.0 + 1e-8)
-    sigma = torch.exp(-t).view(B, 1, 1, 1)  # [B,1,1,1]
+    # # --- single step (grad ON at idx for QRM) --------------------------------
+    den_k, c, c2, c3, t_raw = fwd_qrm(x_pre_k_qrm, sigma_t, need_stats=True)
 
-    noise = torch.randn_like(x)
-    x_t = sigma * noise + (1 - sigma) * x  # rectified flow style noise scaling
-
-    vis_fn = extra_args.get("dynamic_vision_fn", None)
-    if callable(vis_fn):
-        prompt   = extra_args.get("prompt", None)
-        unprompt = extra_args.get("uncond_prompt", [""] * B)
-        if isinstance(prompt, str):
-            prompt = [prompt]
-        if isinstance(unprompt, str):
-            unprompt = [unprompt]
-        all_prompts = prompt + unprompt
-        features = vis_fn(x.repeat(2, 1, 1, 1), all_prompts,text_inputs)
-        extra_args["vision_feature"], extra_args["uncond_vision_feature"] = features.chunk(2)
-    # strip helper keys so the UNet sees only what it expects
-    clean_args = {k: v for k, v in extra_args.items() if k not in ("dynamic_vision_fn", "prompt", "uncond_prompt")}
-
-    t_raw = -sigma.log().view(B)  # [B]
-
-    s_in = x.new_ones([B])  # to match DPM++ call structure
-
-    if lora_only:
-        with torch.cuda.amp.autocast(enabled=False):
-            denoised, q_t,c,c2,c3 = model(x_t, sigma.view(B) * s_in, t_raw=t_raw, **clean_args)
+    if sampler.lower() == "euler":
+        d  = to_d(x_pre_k_qrm, sigmas[idx], den_k)
+        dt = sigmas[idx + 1] - sigmas[idx]
+        x_k = x_pre_k_qrm + d * dt
     else:
-        with torch.cuda.amp.autocast(dtype=torch.float16):
-            denoised, q_t,c,c2,c3 = model(x_t, sigma.view(B) * s_in, t_raw=t_raw, **clean_args)
+        t      = t_fn(sigmas[idx])
+        t_next = t_fn(sigmas[idx + 1])
+        h = t_next - t
+        if den_for_qrm_qrm is None or sigmas[idx + 1] == 0:
+            x_k = (sigma_fn(t_next) / sigma_fn(t)) * x_pre_k_qrm - (-h).expm1() * den_k
+        else:
+            h_last = t - t_fn(sigmas[idx - 1]) if idx > 0 else h
+            r = h_last / h
+            den_d = (1 + 1/(2*r)) * den_k - (1/(2*r)) * den_for_qrm_qrm
+            x_k = (sigma_fn(t_next) / sigma_fn(t)) * x_pre_k_qrm - (-h).expm1() * den_d
+            del den_d
 
-    return [denoised], [q_t], [x_t], [sigma],t_raw,c,c2,c3
+    sigma_next = sigmas[idx + 1].view(B)
 
+    with torch.autocast("cuda"):
+        den_next_qrm, _, _, _,qrm_time,sd35_time = model(
+            x_k, sigma_next * s_in,
+            t_raw=(-sigma_next.log()).expand(B),
+            use_qrm=True,
+            **{k: v for k, v in extra_args.items() if k not in ("prompt", "uncond_prompt")}
+        )
+
+    if loss_type == "margin_seeking":
+        with torch.no_grad():
+            den_next_base = fwd_base(x_k_baseline, sigma_next)
+
+    if not isinstance(c2, int):
+        c  = c.detach()
+        c2 = c2.detach()
+        c3 = c3.detach()
+
+    if loss_type == "margin_seeking":
+        return den_next_qrm, den_next_base, c, c2, c3, idx
+    elif loss_type == "reward_maximization":
+        return den_next_qrm, _, c, c2, c3, idx
+    else:
+        raise Exception("undentified loss")
+    
 #################################################################################################
 ### VAE
 #################################################################################################

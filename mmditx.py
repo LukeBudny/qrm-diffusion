@@ -907,24 +907,16 @@ class MMDiTX(nn.Module):
         """
         hw = x.shape[-2:]
         x = self.x_embedder(x) + self.cropped_pos_embed(hw)
-        warmup_mode = kwargs.get("warmup_mode", True)
-        
         if q_t is not None:
             t = self.t_embedder(t, dtype=x.dtype)
             y = y.to(next(self.y_embedder.parameters()).device)
             y = self.y_embedder(y).cuda()      # (N, D)
-            scale = 0.0 if warmup_mode else 1.0
-            # print("DEBUG device check:")
-            # print("timestep:", t.device if torch.is_tensor(t) else type(t))
-            # print("q_t:", q_t.device if torch.is_tensor(q_t) else type(q_t))
-            # print("y:", y.device if torch.is_tensor(y) else type(y))
-            c = (scale * q_t) + t + y 
+            c =  q_t + t + y 
             c2 = t + y
             c3 = q_t
-            # print("q_t + t + y shape:", c.shape, "t + y shape:", c2.shape)
         else:
             t = self.t_embedder(t, dtype=x.dtype)
-            y = y.to(next(self.y_embedder.parameters()).device)
+            # y = y.to(next(self.y_embedder.parameters()).device)
             y = self.y_embedder(y)      # (N, D)
             c = t + y
             c2 = 0
