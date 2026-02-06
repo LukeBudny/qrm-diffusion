@@ -209,6 +209,9 @@ comparative_results/
 eval_scores/
 logs/
 mmcv/
+validation_training_images/
+qrm/validation_training_images/
+
 
 
 # ---- Python Cache / Temp Files ----
@@ -222,6 +225,7 @@ __pycache__/
 
 # ---- Virtual Environments ----
 sd3env/
+sd35-env/
 geneval-env/
 .venv/
 venv/
