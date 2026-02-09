@@ -232,7 +232,7 @@ __pycache__/
 sd3env/
 sd35-env/
 geneval-env/
-/promptgen-env/
+promptgen-env/
 .venv/
 venv/
 env/
