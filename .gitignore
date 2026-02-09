@@ -169,6 +169,11 @@ cython_debug/
 # QRM + SD3.5 PROJECT
 # ======================
 
+# large external repos / vendored stuff
+/ImageReward/
+/geneval/
+/mmdetection/
+
 # ---- Model Weights / Checkpoints ----
 zimage-env
 Z-Image
@@ -196,7 +201,7 @@ eval_images/
 coco_val_images/
 samples/
 outputs/
-*.png
+# *.png
 *.jpg
 *.jpeg
 *.gif
@@ -227,6 +232,7 @@ __pycache__/
 sd3env/
 sd35-env/
 geneval-env/
+/promptgen-env/
 .venv/
 venv/
 env/
