@@ -249,3 +249,9 @@ conda/
 # ---- OS Files ----
 .DS_Store
 Thumbs.db
+
+# but allow this specific QRM checkpoint (folder + contents)
+!models/20251105_223451_QRMModulatorLatentV6_hps_rm_s1_25_steps_v3/
+!models/20251105_223451_QRMModulatorLatentV6_hps_rm_s1_25_steps_v3/**
+models/**/qrmmlp_joint_epoch_*.pth
+!models/**/qrmmlp_joint_epoch_25.pth
