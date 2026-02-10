@@ -17,6 +17,12 @@ Modern text-to-image diffusions models, such as diffusion transformers (DiT), re
 
 ## Installation
 
+Please download the following SD3.5 model files from the SD#.5 github and move to the models folder:
+clip_g.safetensors
+clip_l.safetensors
+sd3.5_medium.safetensors
+t5xxl.safetensors
+
 ```bash
 git clone https://github.com/LukeBudny/qrm-diffusion.git
 cd qrm-diffusion
@@ -35,3 +41,12 @@ pip install torch==2.8.0+cu128 torchvision==0.23.0+cu128 torchaudio==2.8.0+cu128
 # Install packages
 pip install -r requirements.txt
 
+#combine qrm checkpoint files
+cat qrm_epoch25.pth.part* > qrm_epoch25.pth
+
+## Inference
+
+```bash
+python inference.py --mode qrm
+#or for baseline sd3.5
+python inference.py

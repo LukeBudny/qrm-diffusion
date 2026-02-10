@@ -24,3 +24,5 @@ hpsv2==1.2.0
 image-reward==1.5
 clip-benchmark==1.6.2
 open_clip_torch==2.26.1
+
+fire
