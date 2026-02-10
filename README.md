@@ -21,7 +21,6 @@ Modern text-to-image diffusions models, such as diffusion transformers (DiT), re
 git clone https://github.com/LukeBudny/qrm-diffusion.git
 cd qrm-diffusion
 
-# Ubuntu/WSL packages
 sudo apt update
 sudo apt install -y python3.13 python3.13-venv git-lfs
 
@@ -33,6 +32,6 @@ pip install -U pip setuptools wheel
 pip install torch==2.8.0+cu128 torchvision==0.23.0+cu128 torchaudio==2.8.0+cu128 \
   --index-url https://download.pytorch.org/whl/cu128
 
-# Then install the rest
+# Install packages
 pip install -r requirements.txt
 
