@@ -17,11 +17,16 @@ Modern text-to-image diffusions models, such as diffusion transformers (DiT), re
 
 ## Installation
 
-Please download the following SD3.5 model files from the SD#.5 github and move to the models folder:
-clip_g.safetensors
-clip_l.safetensors
-sd3.5_medium.safetensors
-t5xxl.safetensors
+### Download SD3.5 model files
+
+Download the following **SD3.5 model files** from the official SD3.5 GitHub release and place them in the `models/` directory:
+
+- `clip_g.safetensors`
+- `clip_l.safetensors`
+- `sd3.5_medium.safetensors`
+- `t5xxl.safetensors`
+
+### Clone the repository and set up the environment
 
 ```bash
 git clone https://github.com/LukeBudny/qrm-diffusion.git
@@ -33,16 +38,23 @@ sudo apt install -y python3.13 python3.13-venv git-lfs
 python3.13 -m venv qrm-env
 source qrm-env/bin/activate
 pip install -U pip setuptools wheel
+```
 
-# Install PyTorch CUDA 12.8 wheels (cu128)
+###  Install PyTorch CUDA 12.8 wheels (cu128)
+```bash
 pip install torch==2.8.0+cu128 torchvision==0.23.0+cu128 torchaudio==2.8.0+cu128 \
   --index-url https://download.pytorch.org/whl/cu128
+```
 
-# Install packages
+### Install packages
+```bash
 pip install -r requirements.txt
+```
 
-#combine qrm checkpoint files
+### combine qrm checkpoint files
+```bash
 cat qrm_epoch25.pth.part* > qrm_epoch25.pth
+``` 
 
 ## Inference
 
@@ -50,3 +62,4 @@ cat qrm_epoch25.pth.part* > qrm_epoch25.pth
 python inference.py --mode qrm
 #or for baseline sd3.5
 python inference.py
+```
