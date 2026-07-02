@@ -1,5 +1,8 @@
 # QRM: Quality-Aware Modulation for Diffusion Transformers
 
+[![arXiv](https://img.shields.io/badge/arXiv-2606.30934-b31b1b.svg)](https://arxiv.org/abs/2606.30934)
+[![Paper](https://img.shields.io/badge/Paper-arXiv-blue)](https://arxiv.org/abs/2606.30934)
+
 <p align="center">
   <img src="grid_3x2.png" width="900">
 </p>
@@ -63,3 +66,20 @@ python inference.py --mode qrm
 #or for baseline sd3.5
 python inference.py
 ```
+
+---
+
+## Citation
+
+If you find this work useful, please cite:
+
+```bibtex
+@misc{budny2026qualityawaremodulationdiffusiontransformers,
+  title={Quality-Aware Modulation for Diffusion Transformers},
+  author={Luke Budny and Yuhong Guo and Kevin Cheung},
+  year={2026},
+  eprint={2606.30934},
+  archivePrefix={arXiv},
+  primaryClass={cs.LG},
+  url={https://arxiv.org/abs/2606.30934},
+}
