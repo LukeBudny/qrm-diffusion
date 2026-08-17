@@ -24,6 +24,8 @@ from pathlib import Path
 
 import torch
 
+from qrm_diffusion.config import MemoryConfig
+from qrm_diffusion.memory import apply_cuda_memory_policy
 from sd3_infer import SD3Inferencer
 from qrm.qrm_models import QRMModulatorLatentV6
 
@@ -93,6 +95,11 @@ def require_cuda():
             "CUDA not available. This script assumes CUDA because your SD3Inferencer/sd3_infer path uses .cuda()."
         )
     torch.backends.cuda.matmul.allow_tf32 = True
+    memory = apply_cuda_memory_policy(MemoryConfig())
+    print(
+        f"[CUDA] {memory.device_name}: enforcing {memory.limit_gib:.2f} GiB "
+        f"allocator budget ({memory.allocator_fraction:.4f} of device memory)"
+    )
 
 
 def load_prompts_or_fallback(prompts_file: str) -> list[str]:

@@ -1,0 +1,4 @@
+{
+"20251105_223451_QRMModulatorLatentV6_hps_rm_s1_25_steps_v3_e25": "models/20251105_223451_QRMModulatorLatentV6_hps_rm_s1_25_steps_v3/qrmmlp_joint_epoch_25.pth",
+"20260203_210914_QRMModulatorLatentV6_hps_rm_start_15_lr1e6_testing_for_git_e5": "models/20260203_210914_QRMModulatorLatentV6_hps_rm_start_15_lr1e6_testing_for_git/qrmmlp_joint_epoch_5.pth"
+}

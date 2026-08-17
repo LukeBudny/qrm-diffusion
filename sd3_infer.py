@@ -529,7 +529,10 @@ class SD3Inferencer:
         save_per_5_step=False,
         per_step_dir=None,
         qrm_start_step = 25,
-        qrm_end_step = 47) -> torch.Tensor:
+        qrm_end_step = 47,
+        trajectory_trace=None,
+        sigma_policy=None,
+        sigma_controller_options=None) -> torch.Tensor:
         
         if not use_qrm:
             print("I am not using QRM!")
@@ -567,6 +570,9 @@ class SD3Inferencer:
                 "qrm_start_step":qrm_start_step,
                 "qrm_end_step":qrm_end_step,
                 "qrm_type":self.qrm_type,
+                "trajectory_trace":trajectory_trace,
+                "sigma_policy":sigma_policy,
+                "sigma_controller_options":sigma_controller_options,
                 }
         
         noise_scaled = self.sd3.model.model_sampling.noise_scaling(
@@ -671,7 +677,10 @@ class SD3Inferencer:
         save_per_5_step=False, 
         per_step_dir=None,
         qrm_start_step = 25,
-        qrm_end_step = 47
+        qrm_end_step = 47,
+        trajectory_trace=None,
+        sigma_policy=None,
+        sigma_controller_options=None,
     ):
         controlnet_cond = None
         if init_image:
@@ -717,7 +726,10 @@ class SD3Inferencer:
             save_per_5_step=save_per_5_step,         
             per_step_dir=per_step_dir,
             qrm_start_step = qrm_start_step,
-            qrm_end_step = qrm_end_step
+            qrm_end_step = qrm_end_step,
+            trajectory_trace=trajectory_trace,
+            sigma_policy=sigma_policy,
+            sigma_controller_options=sigma_controller_options,
         )
 
         sampled_latent, conditioning = outputs
@@ -760,6 +772,14 @@ def main(
     **kwargs,
 ):
     assert not kwargs, f"Unknown arguments: {kwargs}"
+    from qrm_diffusion.config import MemoryConfig
+    from qrm_diffusion.memory import apply_cuda_memory_policy
+
+    memory = apply_cuda_memory_policy(MemoryConfig())
+    print(
+        f"CUDA allocator budget: {memory.limit_gib:.2f} GiB "
+        f"({memory.allocator_fraction:.4f} of {memory.total_gib:.2f} GiB)"
+    )
 
     config = CONFIGS.get(os.path.splitext(os.path.basename(model))[0], {})
     _shift = shift or config.get("shift", 3)

@@ -1,0 +1,53 @@
+schema_version = 1
+name = "sd35-qrm-fixed-budget-controller"
+architecture = "sd35_native"
+sampler = "adaptive_dpmpp_2m"
+
+[schedule]
+beta = 0.35
+min_step_size = 1.0e-8
+max_step_size = 1.0e6
+min_step_ratio = 1.0e-3
+max_step_ratio = 1.0e3
+terminal_sigma = 0.0
+fixed_nfe = true
+
+[initialization]
+schedule_action = 0.0
+modulation_action = 0.0
+
+[policy]
+hidden_dim = 128
+exploration_std = 0.15
+
+[critic]
+hidden_dim = 128
+
+[reward]
+scorer = "clip"
+device = "cpu"
+model_id = "openai/clip-vit-base-patch32"
+local_files_only = true
+
+[diagnostics]
+record_sigma = true
+record_action = true
+record_step_size = true
+record_quality = true
+record_modulation_norm = true
+
+# Schedule parity has passed. Critic/policy training may now run with the
+# backbone and QRM frozen; joint control remains gated on equal-NFE evaluation.
+[training]
+quality_critic = true
+timestep_policy = true
+joint_controller = false
+policy_learning_rate = 1.0e-4
+critic_learning_rate = 3.0e-4
+entropy_weight = 1.0e-3
+epochs = 1
+
+[evaluation]
+min_prompts = 32
+min_mean_reward_delta = 0.0
+min_positive_fraction = 0.60

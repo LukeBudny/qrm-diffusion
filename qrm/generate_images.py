@@ -11,6 +11,8 @@ from itertools import islice
 from pathlib import Path
 from torch.utils.data import IterableDataset
 from torch.utils.data import DataLoader
+from qrm_diffusion.config import MemoryConfig
+from qrm_diffusion.memory import apply_cuda_memory_policy
 
 # === CONFIGURATION ===
 CAPTIONS_PATH = "qrm/annotations/captions_val2014.json"
@@ -389,6 +391,12 @@ def run_generation_from_cached(
 def main():
 
     args = parse_args()
+    if torch.cuda.is_available():
+        memory = apply_cuda_memory_policy(MemoryConfig())
+        print(
+            f"CUDA allocator budget: {memory.limit_gib:.2f} GiB "
+            f"({memory.allocator_fraction:.4f} of {memory.total_gib:.2f} GiB)"
+        )
 
     if args.only_image_ids_file or args.only_image_ids:
         ids = []

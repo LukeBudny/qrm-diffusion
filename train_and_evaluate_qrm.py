@@ -16,6 +16,8 @@ import re
 from collections import defaultdict, Counter
 import json
 import sys
+from qrm_diffusion.config import MemoryConfig
+from qrm_diffusion.memory import apply_cuda_memory_policy
 
 
 # "20251110_033131_QRMModulatorLatentV6_clip_score_rm_s1_50_steps_v5_beta_distribution_e25": "models/20251110_033131_QRMModulatorLatentV6_clip_score_rm_s1_50_steps_v5_beta_distribution/qrmmlp_joint_epoch_25.pth",
@@ -101,7 +103,11 @@ def run_one_experiment(exp):
 
     print(f"\n🚀 Starting run: {exp['model_tag']}")
 
-    torch.cuda.set_per_process_memory_fraction(1.0, device=0) 
+    memory = apply_cuda_memory_policy(MemoryConfig())
+    print(
+        f"CUDA allocator budget: {memory.limit_gib:.2f} GiB "
+        f"({memory.allocator_fraction:.4f} of {memory.total_gib:.2f} GiB)"
+    )
     torch.backends.cuda.matmul.allow_tf32 = True
 
     inferencer = SD3Inferencer()

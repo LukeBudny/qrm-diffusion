@@ -237,7 +237,9 @@ class BaseModel(torch.nn.Module):
             if kwargs.get("qrm_type",self.qrm_type) == "QRMModulatorLatent":
                 q_t = self.qrm(t_raw.float(), x.float(), y.float()).cuda()
             elif kwargs.get("qrm_type", self.qrm_type) in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
-                t32 = t_raw.to(device=dev, dtype=torch.float32)
+                # AdaLN baseline collection must use the same SD3 model-time
+                # coordinate as the actual diffusion forward pass.
+                t32 = timestep.to(device=dev, dtype=torch.float32)
                 y32 = y.to(device=dev, dtype=torch.float32)
                 c_base32 = (self.diffusion_model.t_embedder(t32, dtype=torch.float32) +
                             self.diffusion_model.y_embedder(y32))  # module outputs choose their own dtype; we force fp32 via inputs
@@ -278,7 +280,8 @@ class BaseModel(torch.nn.Module):
                 t_raw = t_raw.expand(B)
                 q_t = self.qrm(t_raw.float(), x.float(), y.float()).cuda()
             elif kwargs.get("qrm_type", self.qrm_type) in ["QRMModulatorLatentV2","QRMModulatorLatentV3","QRMModulatorLatentV4","QRMModulatorLatentV5","QRMModulatorLatentV6"]:
-                t32 = t_raw.to(device=dev, dtype=torch.float32)
+                # Keep baseline AdaLN and diffusion-model conditioning aligned.
+                t32 = timestep.to(device=dev, dtype=torch.float32)
                 y32 = y.to(device=dev, dtype=torch.float32)
                 c_base32 = (self.diffusion_model.t_embedder(t32, dtype=torch.float32) +
                             self.diffusion_model.y_embedder(y32))  # module outputs choose their own dtype; we force fp32 via inputs
@@ -521,17 +524,79 @@ def to_d(x, sigma, denoised):
 
 @torch.no_grad()
 @torch.autocast("cuda", dtype=torch.float16)
-def sample_euler(model, x, sigmas, extra_args=None):
+def sample_euler(model, x, sigmas, text_inputs=None, use_qrm=False, extra_args=None):
     """Implements Algorithm 2 (Euler steps) from Karras et al. (2022)."""
+    del text_inputs
     extra_args = {} if extra_args is None else extra_args
     s_in = x.new_ones([x.shape[0]])
+    batch_size = x.shape[0]
+    qrm_start_step = extra_args.get("qrm_start_step", 25)
+    qrm_end_step = extra_args.get("qrm_end_step", 47)
+    trajectory_trace = extra_args.get("trajectory_trace")
+    clean_args = {
+        key: value
+        for key, value in extra_args.items()
+        if key not in ("prompt", "uncond_prompt")
+    }
+
+    for key in ("cond", "uncond"):
+        if key in clean_args and isinstance(clean_args[key], dict):
+            for subkey in ("c_crossattn", "y"):
+                value = clean_args[key].get(subkey)
+                if value is not None:
+                    clean_args[key][subkey] = value.to(x.device)
+
     for i in tqdm(range(len(sigmas) - 1)):
         sigma_hat = sigmas[i]
-        denoised = model(x, sigma_hat * s_in, **extra_args)
+        t_raw = (-torch.log(sigma_hat)).expand(batch_size).to(
+            dtype=torch.float32, device=x.device
+        )
+        use_qrm_step = bool(use_qrm) and qrm_start_step <= i <= qrm_end_step
+        output = model(
+            x,
+            sigma_hat * s_in,
+            t_raw=t_raw,
+            use_qrm=use_qrm_step,
+            **clean_args,
+        )
+        if isinstance(output, (tuple, list)):
+            denoised = output[0]
+            modulation = output[3] if len(output) > 3 else None
+        else:
+            denoised = output
+            modulation = None
         d = to_d(x, sigma_hat, denoised)
         dt = sigmas[i + 1] - sigma_hat
         # Euler method
         x = x + d * dt
+        if trajectory_trace is not None:
+            from qrm_diffusion.agents.state import TrajectoryEntry
+
+            next_sigma = sigmas[i + 1]
+            step_size = None
+            if next_sigma != 0:
+                step_size = float(
+                    ((-torch.log(next_sigma)) - (-torch.log(sigma_hat))).detach().cpu()
+                )
+            modulation_norm = None
+            if torch.is_tensor(modulation):
+                modulation_norm = float(
+                    torch.linalg.vector_norm(modulation.detach().float()).cpu()
+                )
+            trajectory_trace.append(
+                TrajectoryEntry(
+                    step_index=i,
+                    sigma=float(sigma_hat.detach().cpu()),
+                    next_sigma=float(next_sigma.detach().cpu()),
+                    step_size=step_size,
+                    action=0.0,
+                    modulation_norm=modulation_norm,
+                    denoised_norm=float(
+                        torch.linalg.vector_norm(denoised.detach().float()).cpu()
+                    ),
+                    sample_norm=float(torch.linalg.vector_norm(x.detach().float()).cpu()),
+                )
+            )
     return x
 
 
@@ -570,6 +635,7 @@ def sample_dpmpp_2m(model, x, sigmas, text_inputs=None, use_qrm=False, extra_arg
     B = x.shape[0]
     qrm_start_step = extra_args.get("qrm_start_step", 25)
     qrm_end_step = extra_args.get("qrm_end_step", 47)
+    trajectory_trace = extra_args.get("trajectory_trace")
     sampler_time = []
 
     for i in tqdm(range(len(sigmas) - 1), leave=False):
@@ -606,6 +672,29 @@ def sample_dpmpp_2m(model, x, sigmas, text_inputs=None, use_qrm=False, extra_arg
             denoised_d = (1 + 1/(2*r)) * denoised - (1/(2*r)) * old_denoised
             x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * denoised_d
 
+        if trajectory_trace is not None:
+            from qrm_diffusion.agents.state import TrajectoryEntry
+
+            modulation_norm = None
+            if torch.is_tensor(c3):
+                modulation_norm = float(
+                    torch.linalg.vector_norm(c3.detach().float()).cpu()
+                )
+            trajectory_trace.append(
+                TrajectoryEntry(
+                    step_index=i,
+                    sigma=float(sigmas[i].detach().cpu()),
+                    next_sigma=float(sigmas[i + 1].detach().cpu()),
+                    step_size=None if sigmas[i + 1] == 0 else float(h.detach().cpu()),
+                    action=0.0,
+                    modulation_norm=modulation_norm,
+                    denoised_norm=float(
+                        torch.linalg.vector_norm(denoised.detach().float()).cpu()
+                    ),
+                    sample_norm=float(torch.linalg.vector_norm(x.detach().float()).cpu()),
+                )
+            )
+
         old_denoised = denoised
 
         # optional per-step save
@@ -623,6 +712,145 @@ def sample_dpmpp_2m(model, x, sigmas, text_inputs=None, use_qrm=False, extra_arg
     
     # print("time spent on qrm: ", sum(qrm_time),"time spent on sd35: ", sum(sd35_time),"time spent on sampler: ", sum(sampler_time))
     return x
+
+
+def _adaptive_native_model(model, sigmas, use_qrm, extra_args):
+    """Adapt the legacy CFG denoiser to the closed-loop sampler interface."""
+
+    helper_keys = {
+        "prompt",
+        "uncond_prompt",
+        "qrm_start_step",
+        "qrm_end_step",
+        "qrm_sigma_start",
+        "qrm_sigma_end",
+        "trajectory_trace",
+        "save_per_5_step",
+        "per_step_dir",
+        "vae_decode",
+        "process_out",
+        "sigma_policy",
+        "sigma_controller_options",
+    }
+    clean_args = {key: value for key, value in extra_args.items() if key not in helper_keys}
+
+    for key in ("cond", "uncond"):
+        if key in clean_args and isinstance(clean_args[key], dict):
+            for subkey in ("c_crossattn", "y"):
+                value = clean_args[key].get(subkey)
+                if value is not None:
+                    clean_args[key][subkey] = value.to(sigmas.device)
+
+    last_model_index = len(sigmas) - 2
+    start_index = max(0, min(int(extra_args.get("qrm_start_step", 25)), last_model_index))
+    end_index = max(start_index, min(int(extra_args.get("qrm_end_step", 47)), last_model_index))
+    sigma_start = float(extra_args.get("qrm_sigma_start", sigmas[start_index].item()))
+    sigma_end = float(extra_args.get("qrm_sigma_end", sigmas[end_index].item()))
+    if sigma_start < sigma_end:
+        raise ValueError("qrm_sigma_start must be greater than or equal to qrm_sigma_end")
+
+    def denoise(x_current, sigma_batch, **unused_args):
+        del unused_args
+        sigma_scalar = sigma_batch.flatten()[0]
+        # Compare in the model-input dtype. Native CFG multiplies the FP32
+        # schedule by an FP16 batch vector, so comparing that rounded value to
+        # Python/FP32 bounds would incorrectly exclude both interval endpoints.
+        sigma_start_bound = sigma_scalar.new_tensor(sigma_start)
+        sigma_end_bound = sigma_scalar.new_tensor(sigma_end)
+        use_qrm_step = bool(use_qrm) and bool(
+            (sigma_scalar >= sigma_end_bound) & (sigma_scalar <= sigma_start_bound)
+        )
+        t_raw = (-torch.log(torch.clamp(sigma_scalar, min=1e-12))).expand(x_current.shape[0])
+        return model(
+            x_current,
+            sigma_batch,
+            t_raw=t_raw.to(dtype=torch.float32, device=x_current.device),
+            use_qrm=use_qrm_step,
+            **clean_args,
+        )
+
+    return denoise
+
+
+def _run_adaptive_native_sampler(
+    sampler,
+    model,
+    x,
+    sigmas,
+    *,
+    use_qrm=False,
+    extra_args=None,
+):
+    from qrm_diffusion.agents.controller import FixedBudgetSigmaController, StepConstraints
+
+    args = {} if extra_args is None else dict(extra_args)
+    controller = args.pop("sigma_controller", None)
+    if controller is None:
+        policy = args.pop("sigma_policy", None)
+        options = dict(args.pop("sigma_controller_options", {}) or {})
+        constraints = StepConstraints(
+            min_step_size=float(options.pop("min_step_size", 1.0e-8)),
+            max_step_size=float(options.pop("max_step_size", 1.0e6)),
+            min_step_ratio=float(options.pop("min_step_ratio", 1.0e-3)),
+            max_step_ratio=float(options.pop("max_step_ratio", 1.0e3)),
+        )
+        controller = FixedBudgetSigmaController(
+            sigmas,
+            beta=float(options.pop("beta", 0.35)),
+            constraints=constraints,
+            policy=policy,
+        )
+        if options:
+            raise ValueError(f"Unknown sigma controller options: {sorted(options)}")
+    elif controller.nfe_budget != len(sigmas) - 1:
+        raise ValueError("Controller NFE budget must match the supplied sigma schedule")
+
+    adaptive_model = _adaptive_native_model(model, sigmas, use_qrm, args)
+    result = sampler(adaptive_model, x, controller)
+    trace_sink = args.get("trajectory_trace")
+    if trace_sink is not None:
+        trace_sink.extend(result.state.trajectory_trace)
+    return result.sample
+
+
+@torch.no_grad()
+@torch.autocast("cuda", dtype=torch.float16)
+def sample_adaptive_euler(
+    model, x, sigmas, text_inputs=None, use_qrm=False, extra_args=None
+):
+    """Native SD3.5 adaptive Euler entry point with fixed-schedule parity."""
+
+    del text_inputs
+    from qrm_diffusion.samplers import sample_adaptive_euler as adaptive_sampler
+
+    return _run_adaptive_native_sampler(
+        adaptive_sampler,
+        model,
+        x,
+        sigmas,
+        use_qrm=use_qrm,
+        extra_args=extra_args,
+    )
+
+
+@torch.no_grad()
+@torch.autocast("cuda", dtype=torch.float16)
+def sample_adaptive_dpmpp_2m(
+    model, x, sigmas, text_inputs=None, use_qrm=False, extra_args=None
+):
+    """Native SD3.5 adaptive DPM++ 2M entry point using actual step history."""
+
+    del text_inputs
+    from qrm_diffusion.samplers import sample_adaptive_dpmpp_2m as adaptive_sampler
+
+    return _run_adaptive_native_sampler(
+        adaptive_sampler,
+        model,
+        x,
+        sigmas,
+        use_qrm=use_qrm,
+        extra_args=extra_args,
+    )
 
 def save_and_decode_x(latents,per_step_dir,vae_decode,process_out,step_idx: int,):
     """

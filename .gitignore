@@ -177,7 +177,7 @@ cython_debug/
 # ---- Model Weights / Checkpoints ----
 zimage-env
 Z-Image
-models/
+/models/
 checkpoints/
 *.safetensors
 *.ckpt
@@ -229,6 +229,7 @@ __pycache__/
 *.bak
 
 # ---- Virtual Environments ----
+.runtime/
 sd3env/
 sd35-env/
 geneval-env/
@@ -250,7 +251,31 @@ conda/
 .DS_Store
 Thumbs.db
 
-# but allow this specific QRM checkpoint (folder + contents)
-!models/qrm_checkpoint/
-!models/qrm_checkpoint/**
+# ======================
+# LOCAL RESEARCH WORKSPACE
+# ======================
+
+# Previous repository metadata retained as a local, recoverable backup.
+/.git-qrm-diffusion-backup-*/
+
+# Personal Codex permissions; do not impose local trust/approval policy on clones.
+/.codex/config.toml
+
+# Local installers and all model/checkpoint formats, including split archives.
+/*.deb
+*.pth
+*.pth.*
+*.safetensors
+*.ckpt
+/models/
+/checkpoints/
+
+# Inputs, generated training material, and precomputed features.
+/inputs/
+/training_onestep_images/
+/validation_training_images/
+/qrm/annotations/
+/qrm/precomputed_prompt_folder/
+/qrm/training_onestep_images/
+/qrm/validation_training_images/
 

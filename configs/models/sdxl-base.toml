@@ -1,0 +1,31 @@
+[project]
+root = "../.."
+
+[memory]
+max_vram_gib = 28.0
+device = 0
+enforce = true
+expandable_segments = true
+
+[model]
+backend = "diffusers"
+name = "sdxl-base"
+model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+dtype = "float16"
+cpu_offload = true
+attention_slicing = true
+vae_slicing = true
+use_safetensors = true
+
+[generation]
+prompt = "A cinematic photograph of a mountain lake at sunrise."
+negative_prompt = "blurry, low quality"
+output_dir = "outputs"
+width = 1024
+height = 1024
+steps = 30
+guidance_scale = 5.0
+seed = 42
+
+[qrm]
+enabled = false
