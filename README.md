@@ -51,6 +51,7 @@ Use Python 3.11 or newer. In an activated virtual environment:
 pip install torch==2.8.0+cu128 torchvision==0.23.0+cu128 torchaudio==2.8.0+cu128 \
   --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
 For the native SD3.5 backend, place these files in `models/`:

@@ -26,3 +26,4 @@ clip-benchmark==1.6.2
 open_clip_torch==2.26.1
 
 fire
+pytest==7.2.0

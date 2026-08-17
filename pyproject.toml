@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qrm-diffusion"
+version = "0.1.0"
+description = "Quality-aware modulation and adaptive fixed-budget sampling for diffusion models"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE-CODE" }
+
+[project.scripts]
+qrm-diffusion = "qrm_diffusion.cli:main"
+
+[tool.setuptools]
+py-modules = [
+  "dit_embedder",
+  "inference",
+  "mmditx",
+  "other_impls",
+  "sd3_impls",
+  "sd3_infer",
+  "train_and_evaluate_qrm",
+]
+
+[tool.setuptools.packages.find]
+include = ["qrm", "qrm.*", "qrm_diffusion", "qrm_diffusion.*"]
