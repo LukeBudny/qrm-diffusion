@@ -18,7 +18,7 @@ from qrm_diffusion.agents import (
 from qrm_diffusion.agents.state import TrajectoryEntry
 from qrm_diffusion.agents.training import ActorCriticUpdater
 from qrm_diffusion.agents.evaluation import evaluate_joint_gate
-from qrm_diffusion.agents.reward import CLIPReward
+from qrm_diffusion.agents.reward import CLIPReward, CompositeReward
 from qrm_diffusion.agents.diagnostics import summarize_policy_records
 
 
@@ -39,6 +39,8 @@ def test_agent_toml_enables_schedule_training_but_not_joint_control() -> None:
     assert config.training.normalize_advantages
     assert config.training.action_l2_weight > 0
     assert config.training.kl_weight > 0
+    assert config.reward.scorer == "composite"
+    assert config.reward.preference_scorer == "image_reward"
 
 
 def test_controller_checkpoint_round_trip(tmp_path: Path) -> None:
@@ -141,6 +143,29 @@ def test_clip_reward_truncates_long_prompts(tmp_path: Path) -> None:
     reward.score([image_path, image_path], ["word " * 100, "word " * 100])
     assert captured["truncation"] is True
     assert captured["max_length"] == 77
+
+
+def test_composite_reward_normalizes_alignment_and_preference_deltas() -> None:
+    class Scorer:
+        def __init__(self, values):
+            self.values = values
+
+        def relative_many(self, _candidates, _reference, _prompt):
+            return self.values
+
+    reward = CompositeReward(
+        Scorer([0.005, -0.005]),
+        Scorer([0.1, 0.05]),
+        alignment_weight=0.5,
+        preference_weight=0.5,
+        alignment_scale=0.005,
+        preference_scale=0.1,
+    )
+    components = reward.relative_many_components(["a", "b"], "fixed", "prompt")
+    assert components[0]["reward"] == 1.0
+    assert components[1]["reward"] == -0.25
+    assert components[0]["alignment_delta"] == 0.005
+    assert components[0]["preference_delta"] == 0.1
 
 
 def test_batched_actor_critic_normalizes_and_regularizes() -> None:

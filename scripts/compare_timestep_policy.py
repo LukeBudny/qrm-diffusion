@@ -129,7 +129,10 @@ def main() -> int:
                 policies=[policy],
             )
             trace = traces[0]
-            delta = reward.relative(policy_path, fixed_path, prompt)
+            reward_components = reward.relative_many_components(
+                [policy_path], fixed_path, prompt
+            )[0]
+            delta = reward_components["reward"]
             deltas.append(delta)
             metadata = prompt_metadata.get(index, {})
             record = {
@@ -139,6 +142,7 @@ def main() -> int:
                 "seed": seed,
                 "nfe": len(trace),
                 "reward_delta": delta,
+                "reward_components": reward_components,
                 "prompt": prompt,
                 "category": metadata.get("category"),
                 "challenge": metadata.get("challenge"),

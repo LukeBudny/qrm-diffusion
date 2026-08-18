@@ -24,10 +24,18 @@ exploration_std = 0.15
 hidden_dim = 128
 
 [reward]
-scorer = "clip"
+scorer = "composite"
 device = "cpu"
 model_id = "openai/clip-vit-base-patch32"
 local_files_only = true
+alignment_weight = 0.5
+preference_weight = 0.5
+alignment_scale = 4.0e-3
+preference_scale = 8.5e-2
+preference_scorer = "image_reward"
+preference_device = "cuda:0"
+preference_checkpoint = "~/.cache/ImageReward/ImageReward.pt"
+preference_config = "~/.cache/ImageReward/med_config.json"
 
 [diagnostics]
 record_sigma = true

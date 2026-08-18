@@ -135,6 +135,11 @@ def summarize_policy_records(
     if not records:
         raise ValueError("At least one policy record is required")
     rewards = [float(record["reward_delta"]) for record in records]
+    component_values: dict[str, list[float]] = defaultdict(list)
+    for record in records:
+        for key, value in (record.get("reward_components") or {}).items():
+            if key != "reward":
+                component_values[str(key)].append(float(value))
     grouped: dict[str, dict[str, list[float]]] = {
         "category": defaultdict(list),
         "challenge": defaultdict(list),
@@ -212,6 +217,15 @@ def summarize_policy_records(
             samples=bootstrap_samples,
             confidence=bootstrap_confidence,
         ),
+        "reward_components": {
+            key: _reward_summary(
+                values,
+                samples=bootstrap_samples,
+                confidence=bootstrap_confidence,
+            )
+            for key, values in sorted(component_values.items())
+            if len(values) == len(records)
+        },
         "by_category": {
             key: _reward_summary(
                 values, samples=bootstrap_samples, confidence=bootstrap_confidence

@@ -24,6 +24,7 @@ hpsv2==1.2.0
 image-reward==1.5
 clip-benchmark==1.6.2
 open_clip_torch==2.26.1
+clip @ git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6
 
 fire
 pytest==7.2.0

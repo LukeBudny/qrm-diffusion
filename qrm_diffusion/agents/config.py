@@ -39,6 +39,14 @@ class RewardSettings:
     device: str = "cpu"
     model_id: str = "openai/clip-vit-base-patch32"
     local_files_only: bool = False
+    alignment_weight: float = 0.5
+    preference_weight: float = 0.5
+    alignment_scale: float = 4.0e-3
+    preference_scale: float = 8.5e-2
+    preference_scorer: str = "image_reward"
+    preference_device: str = "cpu"
+    preference_checkpoint: str = "~/.cache/ImageReward/ImageReward.pt"
+    preference_config: str = "~/.cache/ImageReward/med_config.json"
 
 
 @dataclass(frozen=True)
@@ -141,6 +149,24 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         device=str(reward_data.get("device", "cpu")),
         model_id=str(reward_data.get("model_id", "openai/clip-vit-base-patch32")),
         local_files_only=bool(reward_data.get("local_files_only", False)),
+        alignment_weight=float(reward_data.get("alignment_weight", 0.5)),
+        preference_weight=float(reward_data.get("preference_weight", 0.5)),
+        alignment_scale=float(reward_data.get("alignment_scale", 4.0e-3)),
+        preference_scale=float(reward_data.get("preference_scale", 8.5e-2)),
+        preference_scorer=str(
+            reward_data.get("preference_scorer", "image_reward")
+        ),
+        preference_device=str(reward_data.get("preference_device", "cpu")),
+        preference_checkpoint=str(
+            reward_data.get(
+                "preference_checkpoint", "~/.cache/ImageReward/ImageReward.pt"
+            )
+        ),
+        preference_config=str(
+            reward_data.get(
+                "preference_config", "~/.cache/ImageReward/med_config.json"
+            )
+        ),
     )
     diagnostics = DiagnosticsSettings(
         record_sigma=bool(diagnostics_data.get("record_sigma", True)),
@@ -197,6 +223,14 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         raise ValueError("Policy hidden_dim and exploration_std must be positive")
     if critic.hidden_dim <= 0:
         raise ValueError("Critic hidden_dim must be positive")
+    if (
+        reward.alignment_weight < 0
+        or reward.preference_weight < 0
+        or reward.alignment_weight + reward.preference_weight <= 0
+        or reward.alignment_scale <= 0
+        or reward.preference_scale <= 0
+    ):
+        raise ValueError("Invalid composite reward weights or scales")
     if training.joint_controller and not (
         training.quality_critic and training.timestep_policy
     ):

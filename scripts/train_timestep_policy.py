@@ -214,7 +214,10 @@ def main() -> int:
                 candidate_paths=[candidate_path],
                 policies=[policy],
             )
-            delta = reward.relative(candidate_path, fixed_path, validation_prompt)
+            reward_components = reward.relative_many_components(
+                [candidate_path], fixed_path, validation_prompt
+            )[0]
+            delta = reward_components["reward"]
             deltas.append(delta)
             with validation_metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(
@@ -227,6 +230,7 @@ def main() -> int:
                             "seed": seed,
                             "nfe": len(traces[0]),
                             "reward_delta": delta,
+                            "reward_components": reward_components,
                             "trajectory": trajectory_diagnostics(
                                 traces[0], reference_trace, critic=critic
                             ),
@@ -274,9 +278,10 @@ def main() -> int:
                 candidate_paths=candidate_paths,
                 policies=exploration_policies,
             )
-            terminal_rewards = reward.relative_many(
+            reward_components = reward.relative_many_components(
                 candidate_paths, reference_path, prompt
             )
+            terminal_rewards = [item["reward"] for item in reward_components]
             for candidate, (trace, terminal_reward) in enumerate(
                 zip(traces, terminal_rewards)
             ):
@@ -290,6 +295,7 @@ def main() -> int:
                         "seed": seed,
                         "nfe": len(trace),
                         "reward": terminal_reward,
+                        "reward_components": reward_components[candidate],
                         "trajectory": trajectory_diagnostics(
                             trace, reference_trace, critic=critic
                         ),
