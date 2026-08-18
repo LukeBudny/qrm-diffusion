@@ -8,12 +8,17 @@ from pathlib import Path
 import torch
 
 from qrm_diffusion.agents import (
+    QualityCritic,
     create_policy,
     load_agent_config,
     load_controller_checkpoint,
 )
 from qrm_diffusion.agents.reward import create_reward
-from qrm_diffusion.agents.rollout import paired_schedule_rollout
+from qrm_diffusion.agents.rollout import grouped_schedule_rollout
+from qrm_diffusion.agents.diagnostics import (
+    summarize_policy_records,
+    trajectory_diagnostics,
+)
 from qrm_diffusion.agents.evaluation import evaluate_joint_gate
 from qrm_diffusion.backends import create_backend
 from qrm_diffusion.config import load_config
@@ -35,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         "--seed-offsets",
         default="0,10000,20000",
         help="Comma-separated repeat offsets; every repeat must pass the gate",
+    )
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="Run the requested repeats and write diagnostics without applying the joint gate",
     )
     return parser.parse_args()
 
@@ -58,15 +68,30 @@ def main() -> int:
     ))
     backend.load()
     policy = create_policy(agent, device=f"cuda:{config.memory.device}")
-    load_controller_checkpoint(args.checkpoint, policy=policy, map_location=f"cuda:{config.memory.device}")
+    critic = QualityCritic(agent.critic.hidden_dim).to(f"cuda:{config.memory.device}")
+    load_controller_checkpoint(
+        args.checkpoint,
+        policy=policy,
+        critic=critic,
+        map_location=f"cuda:{config.memory.device}",
+    )
     policy.eval()
+    critic.eval()
     reward = create_reward(agent.reward)
+    prompt_path = Path(args.prompts_file).expanduser().resolve()
     prompts = [
         line.strip() for line in Path(args.prompts_file).read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     if args.max_prompts is not None:
         prompts = prompts[: args.max_prompts]
+    metadata_path = prompt_path.with_suffix(".jsonl")
+    prompt_metadata = {}
+    if metadata_path.is_file():
+        for line in metadata_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                item = json.loads(line)
+                prompt_metadata[int(item["prompt_index"])] = item
     output_dir = config.resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     progress_path = output_dir / "evaluation.jsonl"
@@ -77,7 +102,7 @@ def main() -> int:
                 item = json.loads(line)
                 completed[(int(item["repeat"]), int(item["prompt_index"]))] = item
     seed_offsets = [int(value.strip()) for value in args.seed_offsets.split(",") if value.strip()]
-    if len(seed_offsets) < agent.evaluation.required_repeats:
+    if not args.diagnostic_only and len(seed_offsets) < agent.evaluation.required_repeats:
         raise ValueError(
             f"The consistency gate requires at least {agent.evaluation.required_repeats} repeats"
         )
@@ -93,18 +118,20 @@ def main() -> int:
             seed = config.generation.seed + seed_offset + index
             fixed_path = repeat_dir / f"{index:05d}-fixed.png"
             policy_path = repeat_dir / f"{index:05d}-policy.png"
-            trace = paired_schedule_rollout(
+            reference_trace, traces = grouped_schedule_rollout(
                 backend,
                 config,
                 agent,
                 prompt=prompt,
                 seed=seed,
                 fixed_path=fixed_path,
-                policy_path=policy_path,
-                policy=policy,
+                candidate_paths=[policy_path],
+                policies=[policy],
             )
+            trace = traces[0]
             delta = reward.relative(policy_path, fixed_path, prompt)
             deltas.append(delta)
+            metadata = prompt_metadata.get(index, {})
             record = {
                 "repeat": repeat_index,
                 "seed_offset": seed_offset,
@@ -112,6 +139,12 @@ def main() -> int:
                 "seed": seed,
                 "nfe": len(trace),
                 "reward_delta": delta,
+                "prompt": prompt,
+                "category": metadata.get("category"),
+                "challenge": metadata.get("challenge"),
+                "trajectory": trajectory_diagnostics(
+                    trace, reference_trace, critic=critic
+                ),
             }
             with progress_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record) + "\n")
@@ -133,12 +166,38 @@ def main() -> int:
             f"positive_fraction={result.positive_fraction:.3f} "
             f"gate={'PASS' if result.passed else 'FAIL'}"
         )
-        if not result.passed:
+        if not args.diagnostic_only and not result.passed:
             print("Stopping early: consistency requires every repeat to pass")
             break
     passed = len(repeats) >= agent.evaluation.required_repeats and all(
         item["passed"] for item in repeats
     )
+    all_records = [
+        item
+        for item in completed.values()
+        if int(item.get("repeat", 0)) < len(seed_offsets)
+    ]
+    progress_records = [
+        json.loads(line)
+        for line in progress_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    by_key = {
+        (int(item["repeat"]), int(item["prompt_index"])): item
+        for item in [*all_records, *progress_records]
+    }
+    diagnostic_records = [
+        item for item in by_key.values() if item.get("trajectory") is not None
+    ]
+    if diagnostic_records:
+        diagnostics = summarize_policy_records(
+            diagnostic_records,
+            bootstrap_samples=agent.evaluation.bootstrap_samples,
+            bootstrap_confidence=agent.evaluation.bootstrap_confidence,
+        )
+        (output_dir / "diagnostics.json").write_text(
+            json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8"
+        )
     report = {
         "passed": passed,
         "required_repeats": agent.evaluation.required_repeats,
@@ -146,6 +205,7 @@ def main() -> int:
         "repeats": repeats,
         "nfe": config.generation.steps,
         "checkpoint": str(Path(args.checkpoint).resolve()),
+        "diagnostic_only": args.diagnostic_only,
     }
     (output_dir / "evaluation.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
@@ -154,7 +214,7 @@ def main() -> int:
         f"repeats={len(repeats)} prompts_per_repeat={len(prompts)} "
         f"nfe={config.generation.steps} joint_gate={'PASS' if passed else 'FAIL'}"
     )
-    return 0 if passed else 2
+    return 0 if args.diagnostic_only or passed else 2
 
 
 if __name__ == "__main__":

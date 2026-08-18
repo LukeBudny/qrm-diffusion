@@ -58,6 +58,14 @@ class TrainingSettings:
     policy_learning_rate: float = 1.0e-4
     critic_learning_rate: float = 3.0e-4
     entropy_weight: float = 1.0e-3
+    candidates_per_prompt: int = 4
+    batch_prompts: int = 4
+    normalize_advantages: bool = True
+    action_l2_weight: float = 1.0e-3
+    kl_weight: float = 1.0e-3
+    max_grad_norm: float = 1.0
+    validation_interval_prompts: int = 32
+    validation_max_prompts: int = 32
     epochs: int = 1
 
 
@@ -67,6 +75,8 @@ class EvaluationSettings:
     min_mean_reward_delta: float = 0.0
     min_positive_fraction: float = 0.6
     required_repeats: int = 3
+    bootstrap_samples: int = 2000
+    bootstrap_confidence: float = 0.95
 
 
 @dataclass(frozen=True)
@@ -148,6 +158,16 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         policy_learning_rate=float(training_data.get("policy_learning_rate", 1.0e-4)),
         critic_learning_rate=float(training_data.get("critic_learning_rate", 3.0e-4)),
         entropy_weight=float(training_data.get("entropy_weight", 1.0e-3)),
+        candidates_per_prompt=int(training_data.get("candidates_per_prompt", 4)),
+        batch_prompts=int(training_data.get("batch_prompts", 4)),
+        normalize_advantages=bool(training_data.get("normalize_advantages", True)),
+        action_l2_weight=float(training_data.get("action_l2_weight", 1.0e-3)),
+        kl_weight=float(training_data.get("kl_weight", 1.0e-3)),
+        max_grad_norm=float(training_data.get("max_grad_norm", 1.0)),
+        validation_interval_prompts=int(
+            training_data.get("validation_interval_prompts", 32)
+        ),
+        validation_max_prompts=int(training_data.get("validation_max_prompts", 32)),
         epochs=int(training_data.get("epochs", 1)),
     )
     evaluation = EvaluationSettings(
@@ -159,6 +179,10 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             evaluation_data.get("min_positive_fraction", 0.6)
         ),
         required_repeats=int(evaluation_data.get("required_repeats", 3)),
+        bootstrap_samples=int(evaluation_data.get("bootstrap_samples", 2000)),
+        bootstrap_confidence=float(
+            evaluation_data.get("bootstrap_confidence", 0.95)
+        ),
     )
 
     if int(data.get("schema_version", 0)) != 1:
@@ -178,9 +202,21 @@ def load_agent_config(path: str | Path) -> AgentConfig:
     ):
         raise ValueError("joint_controller requires critic and timestep policy training")
     if (
+        training.candidates_per_prompt < 2
+        or training.batch_prompts <= 0
+        or training.action_l2_weight < 0
+        or training.kl_weight < 0
+        or training.max_grad_norm <= 0
+        or training.validation_interval_prompts <= 0
+        or training.validation_max_prompts <= 0
+    ):
+        raise ValueError("Invalid batched training settings")
+    if (
         evaluation.min_prompts <= 0
         or not 0 <= evaluation.min_positive_fraction <= 1
         or evaluation.required_repeats <= 0
+        or evaluation.bootstrap_samples <= 0
+        or not 0 < evaluation.bootstrap_confidence < 1
     ):
         raise ValueError("Invalid evaluation gate settings")
 

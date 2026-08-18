@@ -45,6 +45,14 @@ joint_controller = false
 policy_learning_rate = 1.0e-4
 critic_learning_rate = 3.0e-4
 entropy_weight = 1.0e-3
+candidates_per_prompt = 4
+batch_prompts = 4
+normalize_advantages = true
+action_l2_weight = 1.0e-3
+kl_weight = 1.0e-3
+max_grad_norm = 1.0
+validation_interval_prompts = 32
+validation_max_prompts = 32
 epochs = 1
 
 [evaluation]
@@ -52,3 +60,5 @@ min_prompts = 32
 min_mean_reward_delta = 0.0
 min_positive_fraction = 0.60
 required_repeats = 3
+bootstrap_samples = 2000
+bootstrap_confidence = 0.95

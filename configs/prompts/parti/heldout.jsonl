@@ -1,0 +1,48 @@
+{"prompt_index": 0, "prompt": "a painting of a phone from the 20s", "category": "Artifacts", "challenge": "Style & Format"}
+{"prompt_index": 1, "prompt": "an antique car by a beach", "category": "Vehicles", "challenge": "Fine-grained Detail"}
+{"prompt_index": 2, "prompt": "a tall man stooping down to enter a low red sports car", "category": "People", "challenge": "Complex"}
+{"prompt_index": 3, "prompt": "Times Square at night", "category": "World Knowledge", "challenge": "Simple Detail"}
+{"prompt_index": 4, "prompt": "a box", "category": "Illustrations", "challenge": "Basic"}
+{"prompt_index": 5, "prompt": "A photo of a maple leaf made of water.", "category": "Produce & Plants", "challenge": "Style & Format"}
+{"prompt_index": 6, "prompt": "an ocean at the base of the Great Wall", "category": "World Knowledge", "challenge": "Imagination"}
+{"prompt_index": 7, "prompt": "The Statue of Liberty with the Manhattan skyline in the background.", "category": "World Knowledge", "challenge": "Fine-grained Detail"}
+{"prompt_index": 8, "prompt": "a series of musical notes", "category": "Illustrations", "challenge": "Quantity"}
+{"prompt_index": 9, "prompt": "a harp with a carved eagle figure at the top", "category": "Artifacts", "challenge": "Fine-grained Detail"}
+{"prompt_index": 10, "prompt": "a plate that has no bananas on it. there is a glass without orange juice next to it.", "category": "Food & Beverage", "challenge": "Linguistic Structures"}
+{"prompt_index": 11, "prompt": "Portrait of a gecko wearing a train conductor\u2019s hat and holding a flag that has a yin-yang symbol on it. Chinese ink.", "category": "Animals", "challenge": "Style & Format"}
+{"prompt_index": 12, "prompt": "Oil-on-canvas painting of a blue night sky with roiling energy. A fuzzy and bright yellow crescent moon shining at the top. Below the exploding yellow stars and radiating swirls of blue, a distant village sits quietly on the right. Connecting earth and sky is a flame-like cypress tree with curling and swaying branches on the left. A church spire rises as a beacon over rolling blue hills", "category": "Arts", "challenge": "Complex"}
+{"prompt_index": 13, "prompt": "side view of a brown horse wearing a saddle. the number 55 is stamped in white on its rear flank.", "category": "Animals", "challenge": "Perspective"}
+{"prompt_index": 14, "prompt": "a small tree covered in white blossoms", "category": "Produce & Plants", "challenge": "Simple Detail"}
+{"prompt_index": 15, "prompt": "Downtown Singapore at sunrise. detailed ink wash.", "category": "World Knowledge", "challenge": "Style & Format"}
+{"prompt_index": 16, "prompt": "graffiti spelling BE KIND on white subway tile", "category": "Illustrations", "challenge": "Writing & Symbols"}
+{"prompt_index": 17, "prompt": "a roast turkey on the table", "category": "Food & Beverage", "challenge": "Simple Detail"}
+{"prompt_index": 18, "prompt": "Salvador Dal\u00ed", "category": "People", "challenge": "Basic"}
+{"prompt_index": 19, "prompt": "three children on a couch", "category": "People", "challenge": "Quantity"}
+{"prompt_index": 20, "prompt": "A photograph of the inside of a subway train. There are frogs sitting on the seats. One of them is reading a newspaper. The window shows the river in the background.", "category": "Vehicles", "challenge": "Complex"}
+{"prompt_index": 21, "prompt": "an illustration of a baby daikon radish in a tutu walking a dog", "category": "Produce & Plants", "challenge": "Fine-grained Detail"}
+{"prompt_index": 22, "prompt": "a tree reflected in the sunroof of a blue car", "category": "Produce & Plants", "challenge": "Complex"}
+{"prompt_index": 23, "prompt": "a woman looking at a house", "category": "People", "challenge": "Simple Detail"}
+{"prompt_index": 24, "prompt": "the moon with a smiling face", "category": "Outdoor Scenes", "challenge": "Imagination"}
+{"prompt_index": 25, "prompt": "red and yellow balloons hanging from a ceiling fan", "category": "Indoor Scenes", "challenge": "Fine-grained Detail"}
+{"prompt_index": 26, "prompt": "a white bird in front of a dinosaur standing by some trees", "category": "Outdoor Scenes", "challenge": "Complex"}
+{"prompt_index": 27, "prompt": "A Vietnam map", "category": "World Knowledge", "challenge": "Basic"}
+{"prompt_index": 28, "prompt": "Two cups of coffee, one with latte art of the Eiffel tower. The other has latte art of the Statue of Liberty.", "category": "Food & Beverage", "challenge": "Writing & Symbols"}
+{"prompt_index": 29, "prompt": "a black background with a large yellow square", "category": "Illustrations", "challenge": "Properties & Positioning"}
+{"prompt_index": 30, "prompt": "a ceiling fan", "category": "Indoor Scenes", "challenge": "Basic"}
+{"prompt_index": 31, "prompt": "an airplane", "category": "Vehicles", "challenge": "Basic"}
+{"prompt_index": 32, "prompt": "an antique chest", "category": "Artifacts", "challenge": "Simple Detail"}
+{"prompt_index": 33, "prompt": "a subway train", "category": "Vehicles", "challenge": "Simple Detail"}
+{"prompt_index": 34, "prompt": "lily pads", "category": "Produce & Plants", "challenge": "Basic"}
+{"prompt_index": 35, "prompt": "7 dogs sitting around a poker table, two of which are turning away.", "category": "Animals", "challenge": "Quantity"}
+{"prompt_index": 36, "prompt": "a small kitchen with a white goat in it", "category": "Indoor Scenes", "challenge": "Imagination"}
+{"prompt_index": 37, "prompt": "A tornado made of bees crashing into a skyscraper. painting in the style of Hokusai.", "category": "Arts", "challenge": "Imagination"}
+{"prompt_index": 38, "prompt": "a kitchen without a refrigerator", "category": "Indoor Scenes", "challenge": "Linguistic Structures"}
+{"prompt_index": 39, "prompt": "several lily pads without frogs", "category": "Produce & Plants", "challenge": "Linguistic Structures"}
+{"prompt_index": 40, "prompt": "The raft floated down the river sank.", "category": "Vehicles", "challenge": "Linguistic Structures"}
+{"prompt_index": 41, "prompt": "a comic about a girl going to a farm", "category": "People", "challenge": "Style & Format"}
+{"prompt_index": 42, "prompt": "a circular brown trash bin in front of a brick wall", "category": "Artifacts", "challenge": "Properties & Positioning"}
+{"prompt_index": 43, "prompt": "a painting of black and white checkerboard", "category": "Illustrations", "challenge": "Simple Detail"}
+{"prompt_index": 44, "prompt": "Times Square with thousands of dogs running around", "category": "World Knowledge", "challenge": "Quantity"}
+{"prompt_index": 45, "prompt": "a glass of orange juice to the right of a plate with buttered toast on it", "category": "Food & Beverage", "challenge": "Complex"}
+{"prompt_index": 46, "prompt": "a painting of the food of china", "category": "Food & Beverage", "challenge": "Style & Format"}
+{"prompt_index": 47, "prompt": "supercalifragilisticexpialidocious", "category": "Abstract", "challenge": "Linguistic Structures"}

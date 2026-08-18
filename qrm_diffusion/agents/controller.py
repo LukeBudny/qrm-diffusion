@@ -91,17 +91,34 @@ class RecedingHorizonStepPolicy(nn.Module):
 class ExplorationStepPolicy:
     """Sample rollout actions while retaining a deterministic inference actor."""
 
-    def __init__(self, policy: RecedingHorizonStepPolicy, std: float) -> None:
+    def __init__(
+        self,
+        policy: RecedingHorizonStepPolicy,
+        std: float,
+        *,
+        seed: int | None = None,
+    ) -> None:
         if std <= 0:
             raise ValueError("Exploration standard deviation must be positive")
         self.policy = policy
         self.std = float(std)
+        self.generator = None
+        if seed is not None:
+            device = next(policy.parameters()).device
+            self.generator = torch.Generator(device=device)
+            self.generator.manual_seed(int(seed))
 
     def __call__(
         self, state: AdaptiveSamplerState, guided_denoised: torch.Tensor
     ) -> torch.Tensor:
         mean = self.policy(state, guided_denoised)
-        return (mean + torch.randn_like(mean) * self.std).detach()
+        noise = torch.randn(
+            mean.shape,
+            device=mean.device,
+            dtype=mean.dtype,
+            generator=self.generator,
+        )
+        return (mean + noise * self.std).detach()
 
 
 @dataclass(frozen=True)

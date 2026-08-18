@@ -55,6 +55,19 @@ class CLIPReward:
         scores = self.score([candidate_path, reference_path], [prompt, prompt])
         return float(scores[0] - scores[1])
 
+    def relative_many(
+        self,
+        candidate_paths: Sequence[str | Path],
+        reference_path: str | Path,
+        prompt: str,
+    ) -> list[float]:
+        if not candidate_paths:
+            raise ValueError("At least one candidate image is required")
+        paths = [*candidate_paths, reference_path]
+        scores = self.score(paths, [prompt] * len(paths))
+        reference_score = scores[-1]
+        return [float(value - reference_score) for value in scores[:-1]]
+
 
 def create_reward(settings):
     scorer = settings.scorer.strip().lower()

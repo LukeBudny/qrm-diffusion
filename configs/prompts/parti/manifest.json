@@ -35,6 +35,36 @@
       "Writing & Symbols": 8
     }
   },
+  "validation": {
+    "size": 48,
+    "categories": {
+      "Abstract": 3,
+      "Animals": 4,
+      "Artifacts": 5,
+      "Arts": 2,
+      "Food & Beverage": 6,
+      "Illustrations": 5,
+      "Indoor Scenes": 4,
+      "Outdoor Scenes": 5,
+      "People": 4,
+      "Produce & Plants": 2,
+      "Vehicles": 4,
+      "World Knowledge": 4
+    },
+    "challenges": {
+      "Basic": 4,
+      "Complex": 5,
+      "Fine-grained Detail": 2,
+      "Imagination": 8,
+      "Linguistic Structures": 6,
+      "Perspective": 5,
+      "Properties & Positioning": 2,
+      "Quantity": 3,
+      "Simple Detail": 2,
+      "Style & Format": 6,
+      "Writing & Symbols": 5
+    }
+  },
   "heldout": {
     "size": 48,
     "categories": {

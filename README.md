@@ -112,23 +112,53 @@ frozen:
 
 ```bash
 python scripts/train_timestep_policy.py \
-  --prompts-file configs/prompts/controller-smoke.txt \
-  --checkpoint outputs/controller-checkpoints/latest.pt
+  --config configs/models/sd35-medium-qrm-policy.toml \
+  --prompts-file configs/prompts/parti/train.txt \
+  --validation-prompts-file configs/prompts/parti/validation.txt \
+  --checkpoint outputs/controller-checkpoints/parti-policy.pt \
+  --best-checkpoint outputs/controller-checkpoints/parti-policy-best.pt
 ```
+
+Training renders several independently explored candidate schedules per prompt,
+then performs one normalized-advantage actor-critic update over several prompt
+groups. Mean-action and KL-to-zero-policy penalties keep the learned schedule
+near the exact-parity baseline. A disjoint validation split is evaluated at the
+configured interval, and only the best validation-mean checkpoint is promoted.
+Both training and validation are resumable and append detailed trajectory
+diagnostics under `outputs/`.
 
 Compare a learned schedule against its matching fixed solver at exactly the
 same NFE budget:
 
 ```bash
 python scripts/compare_timestep_policy.py \
-  --checkpoint outputs/controller-checkpoints/latest.pt \
-  --prompts-file configs/prompts/controller-smoke.txt
+  --config configs/models/sd35-medium-qrm-policy.toml \
+  --checkpoint outputs/controller-checkpoints/parti-policy-best.pt \
+  --prompts-file configs/prompts/parti/heldout.txt
 ```
 
 The comparison writes `evaluation.json` and exits successfully only when the
 configured minimum prompt count, mean CLIP-reward improvement, and positive
 prompt fraction all pass. Passing this gate is necessary before implementing or
 enabling joint schedule/QRM actions.
+
+Summarize reward variance, bootstrap intervals, category/challenge strata,
+per-step action and sigma displacement, and critic calibration from a diagnostic
+evaluation:
+
+```bash
+python scripts/diagnose_timestep_policy.py \
+  --evaluation-jsonl outputs/timestep-policy-comparison/evaluation.jsonl \
+  --prompt-metadata configs/prompts/parti/heldout.jsonl \
+  --output outputs/timestep-policy-comparison/diagnostics.json
+```
+
+The first 96-prompt CLIP-only policy did not pass the held-out gate, so joint
+schedule/QRM control remains disabled. Its 48-prompt replay showed a bootstrap
+interval crossing zero and a critic that performed worse than a constant-mean
+predictor. The batched, regularized method above replaces that training path;
+it must still pass every configured held-out repeat before joint control is
+implemented.
 
 Run a Diffusers model:
 

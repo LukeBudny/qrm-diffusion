@@ -14,6 +14,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", required=True)
     parser.add_argument("--output-dir", default="configs/prompts/parti")
     parser.add_argument("--train-size", type=int, default=96)
+    parser.add_argument("--validation-size", type=int, default=48)
     parser.add_argument("--heldout-size", type=int, default=48)
     parser.add_argument("--seed", type=int, default=3505)
     return parser.parse_args()
@@ -46,6 +47,33 @@ def _counts(rows: list[dict[str, str]], field: str) -> dict[str, int]:
     return dict(sorted(Counter(row[field] for row in rows).items()))
 
 
+def _write_split(output: Path, name: str, rows: list[dict[str, str]]) -> None:
+    (output / f"{name}.txt").write_text(
+        "\n".join(row["Prompt"].strip() for row in rows) + "\n", encoding="utf-8"
+    )
+    with (output / f"{name}.jsonl").open("w", encoding="utf-8") as handle:
+        for index, row in enumerate(rows):
+            handle.write(
+                json.dumps(
+                    {
+                        "prompt_index": index,
+                        "prompt": row["Prompt"].strip(),
+                        "category": row["Category"].strip(),
+                        "challenge": row["Challenge"].strip(),
+                    }
+                )
+                + "\n"
+            )
+
+
+def _manifest_split(rows: list[dict[str, str]]) -> dict:
+    return {
+        "size": len(rows),
+        "categories": _counts(rows, "Category"),
+        "challenges": _counts(rows, "Challenge"),
+    }
+
+
 def main() -> int:
     args = parse_args()
     source = Path(args.source).expanduser().resolve()
@@ -61,19 +89,23 @@ def main() -> int:
         if prompt:
             unique.setdefault(prompt, row)
     ordered = _balanced_order(list(unique.values()), args.seed)
-    needed = args.train_size + args.heldout_size
-    if args.train_size <= 0 or args.heldout_size < 32 or len(ordered) < needed:
+    needed = args.train_size + args.validation_size + args.heldout_size
+    if (
+        args.train_size <= 0
+        or args.validation_size <= 0
+        or args.heldout_size < 32
+        or len(ordered) < needed
+    ):
         raise ValueError("Need positive training size, at least 32 held-out prompts, and enough rows")
     heldout = ordered[: args.heldout_size]
-    train = ordered[args.heldout_size : needed]
+    train_end = args.heldout_size + args.train_size
+    train = ordered[args.heldout_size : train_end]
+    validation = ordered[train_end:needed]
     output = Path(args.output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
-    (output / "train.txt").write_text(
-        "\n".join(row["Prompt"].strip() for row in train) + "\n", encoding="utf-8"
-    )
-    (output / "heldout.txt").write_text(
-        "\n".join(row["Prompt"].strip() for row in heldout) + "\n", encoding="utf-8"
-    )
+    _write_split(output, "train", train)
+    _write_split(output, "validation", validation)
+    _write_split(output, "heldout", heldout)
     manifest = {
         "source": source.name,
         "source_sha256": hashlib.sha256(raw).hexdigest(),
@@ -81,16 +113,9 @@ def main() -> int:
         "unique_prompts": len(unique),
         "seed": args.seed,
         "method": "round-robin over Category x Challenge strata",
-        "train": {
-            "size": len(train),
-            "categories": _counts(train, "Category"),
-            "challenges": _counts(train, "Challenge"),
-        },
-        "heldout": {
-            "size": len(heldout),
-            "categories": _counts(heldout, "Category"),
-            "challenges": _counts(heldout, "Challenge"),
-        },
+        "train": _manifest_split(train),
+        "validation": _manifest_split(validation),
+        "heldout": _manifest_split(heldout),
     }
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
