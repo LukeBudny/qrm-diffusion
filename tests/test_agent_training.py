@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,6 +112,35 @@ def test_parti_training_and_heldout_splits_are_disjoint() -> None:
     assert train.isdisjoint(heldout)
     assert train.isdisjoint(validation)
     assert heldout.isdisjoint(validation)
+
+
+def test_larger_parti_v2_split_is_fresh_and_covers_all_axes() -> None:
+    original_dir = ROOT / "configs/prompts/parti"
+    split_dir = ROOT / "configs/prompts/parti-v2"
+    original = set()
+    for name in ("train", "validation", "heldout"):
+        original.update(
+            (original_dir / f"{name}.txt").read_text(encoding="utf-8").splitlines()
+        )
+    splits = {
+        name: set(
+            (split_dir / f"{name}.txt").read_text(encoding="utf-8").splitlines()
+        )
+        for name in ("train", "validation", "heldout")
+    }
+    assert len(splits["train"]) == 256
+    assert len(splits["validation"]) == 64
+    assert len(splits["heldout"]) == 48
+    assert all(values.isdisjoint(original) for values in splits.values())
+    assert splits["train"].isdisjoint(splits["validation"])
+    assert splits["train"].isdisjoint(splits["heldout"])
+    assert splits["validation"].isdisjoint(splits["heldout"])
+    manifest = json.loads(
+        (split_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    for name in splits:
+        assert len(manifest[name]["categories"]) == 12
+        assert len(manifest[name]["challenges"]) == 11
 
 
 def test_clip_reward_truncates_long_prompts(tmp_path: Path) -> None:

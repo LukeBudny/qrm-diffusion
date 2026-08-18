@@ -59,7 +59,7 @@ normalize_advantages = true
 action_l2_weight = 1.0e-3
 kl_weight = 1.0e-3
 max_grad_norm = 1.0
-validation_interval_prompts = 32
+validation_interval_prompts = 64
 validation_max_prompts = 32
 epochs = 1
 

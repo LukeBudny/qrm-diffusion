@@ -1,0 +1,105 @@
+{
+  "source": "PartiPrompts.tsv",
+  "source_sha256": "66b9d693fe1231fe2a9e7541c85a2a5814317a92f9fa183b770653b78e328f82",
+  "source_rows": 1632,
+  "unique_prompts": 1632,
+  "excluded_prompts": 192,
+  "exclude_files": [
+    "train.txt",
+    "validation.txt",
+    "heldout.txt"
+  ],
+  "available_prompts": 1440,
+  "seed": 3510,
+  "method": "round-robin over Category x Challenge strata with axis coverage",
+  "train": {
+    "size": 256,
+    "categories": {
+      "Abstract": 3,
+      "Animals": 31,
+      "Artifacts": 33,
+      "Arts": 8,
+      "Food & Beverage": 18,
+      "Illustrations": 24,
+      "Indoor Scenes": 15,
+      "Outdoor Scenes": 28,
+      "People": 30,
+      "Produce & Plants": 16,
+      "Vehicles": 27,
+      "World Knowledge": 23
+    },
+    "challenges": {
+      "Basic": 34,
+      "Complex": 30,
+      "Fine-grained Detail": 27,
+      "Imagination": 31,
+      "Linguistic Structures": 13,
+      "Perspective": 19,
+      "Properties & Positioning": 5,
+      "Quantity": 20,
+      "Simple Detail": 34,
+      "Style & Format": 25,
+      "Writing & Symbols": 18
+    }
+  },
+  "validation": {
+    "size": 64,
+    "categories": {
+      "Abstract": 1,
+      "Animals": 10,
+      "Artifacts": 9,
+      "Arts": 3,
+      "Food & Beverage": 4,
+      "Illustrations": 6,
+      "Indoor Scenes": 2,
+      "Outdoor Scenes": 5,
+      "People": 8,
+      "Produce & Plants": 3,
+      "Vehicles": 6,
+      "World Knowledge": 7
+    },
+    "challenges": {
+      "Basic": 9,
+      "Complex": 6,
+      "Fine-grained Detail": 9,
+      "Imagination": 9,
+      "Linguistic Structures": 3,
+      "Perspective": 4,
+      "Properties & Positioning": 1,
+      "Quantity": 3,
+      "Simple Detail": 10,
+      "Style & Format": 6,
+      "Writing & Symbols": 4
+    }
+  },
+  "heldout": {
+    "size": 48,
+    "categories": {
+      "Abstract": 1,
+      "Animals": 5,
+      "Artifacts": 6,
+      "Arts": 1,
+      "Food & Beverage": 5,
+      "Illustrations": 3,
+      "Indoor Scenes": 3,
+      "Outdoor Scenes": 7,
+      "People": 5,
+      "Produce & Plants": 2,
+      "Vehicles": 4,
+      "World Knowledge": 6
+    },
+    "challenges": {
+      "Basic": 8,
+      "Complex": 2,
+      "Fine-grained Detail": 5,
+      "Imagination": 6,
+      "Linguistic Structures": 5,
+      "Perspective": 5,
+      "Properties & Positioning": 1,
+      "Quantity": 4,
+      "Simple Detail": 3,
+      "Style & Format": 6,
+      "Writing & Symbols": 3
+    }
+  }
+}

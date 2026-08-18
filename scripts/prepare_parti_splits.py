@@ -17,6 +17,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-size", type=int, default=48)
     parser.add_argument("--heldout-size", type=int, default=48)
     parser.add_argument("--seed", type=int, default=3505)
+    parser.add_argument(
+        "--exclude-file",
+        action="append",
+        default=[],
+        help="Prompt text file to exclude; may be supplied more than once",
+    )
+    parser.add_argument(
+        "--ensure-axis-coverage",
+        action="store_true",
+        help="Ensure every available Category and Challenge appears in each split",
+    )
     return parser.parse_args()
 
 
@@ -74,6 +85,34 @@ def _manifest_split(rows: list[dict[str, str]]) -> dict:
     }
 
 
+def _take_split(
+    ordered: list[dict[str, str]], size: int, *, ensure_axis_coverage: bool
+) -> list[dict[str, str]]:
+    selected: list[dict[str, str]] = []
+    if ensure_axis_coverage:
+        missing_categories = {row["Category"] for row in ordered}
+        missing_challenges = {row["Challenge"] for row in ordered}
+        while missing_categories or missing_challenges:
+            best_index = max(
+                range(len(ordered)),
+                key=lambda index: (
+                    int(ordered[index]["Category"] in missing_categories)
+                    + int(ordered[index]["Challenge"] in missing_challenges),
+                    -index,
+                ),
+            )
+            row = ordered.pop(best_index)
+            selected.append(row)
+            missing_categories.discard(row["Category"])
+            missing_challenges.discard(row["Challenge"])
+            if len(selected) > size:
+                raise ValueError("Split is too small to cover all category/challenge axes")
+    needed = size - len(selected)
+    selected.extend(ordered[:needed])
+    del ordered[:needed]
+    return selected
+
+
 def main() -> int:
     args = parse_args()
     source = Path(args.source).expanduser().resolve()
@@ -88,7 +127,17 @@ def main() -> int:
         prompt = row["Prompt"].strip()
         if prompt:
             unique.setdefault(prompt, row)
-    ordered = _balanced_order(list(unique.values()), args.seed)
+    excluded_prompts = set()
+    for value in args.exclude_file:
+        excluded_prompts.update(
+            line.strip()
+            for line in Path(value).expanduser().resolve().read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    available = [
+        row for prompt, row in unique.items() if prompt not in excluded_prompts
+    ]
+    ordered = _balanced_order(available, args.seed)
     needed = args.train_size + args.validation_size + args.heldout_size
     if (
         args.train_size <= 0
@@ -97,10 +146,15 @@ def main() -> int:
         or len(ordered) < needed
     ):
         raise ValueError("Need positive training size, at least 32 held-out prompts, and enough rows")
-    heldout = ordered[: args.heldout_size]
-    train_end = args.heldout_size + args.train_size
-    train = ordered[args.heldout_size : train_end]
-    validation = ordered[train_end:needed]
+    heldout = _take_split(
+        ordered, args.heldout_size, ensure_axis_coverage=args.ensure_axis_coverage
+    )
+    train = _take_split(
+        ordered, args.train_size, ensure_axis_coverage=args.ensure_axis_coverage
+    )
+    validation = _take_split(
+        ordered, args.validation_size, ensure_axis_coverage=args.ensure_axis_coverage
+    )
     output = Path(args.output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     _write_split(output, "train", train)
@@ -111,8 +165,15 @@ def main() -> int:
         "source_sha256": hashlib.sha256(raw).hexdigest(),
         "source_rows": len(rows),
         "unique_prompts": len(unique),
+        "excluded_prompts": len(excluded_prompts),
+        "exclude_files": [Path(value).name for value in args.exclude_file],
+        "available_prompts": len(available),
         "seed": args.seed,
-        "method": "round-robin over Category x Challenge strata",
+        "method": (
+            "round-robin over Category x Challenge strata with axis coverage"
+            if args.ensure_axis_coverage
+            else "round-robin over Category x Challenge strata"
+        ),
         "train": _manifest_split(train),
         "validation": _manifest_split(validation),
         "heldout": _manifest_split(heldout),
