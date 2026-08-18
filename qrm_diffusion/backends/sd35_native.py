@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .base import DiffusionBackend, GenerationRequest
@@ -21,12 +22,16 @@ class SD35NativeBackend(DiffusionBackend):
         self.sigma_policy = None
 
     def load(self) -> None:
+        options = self.config.model.options
+        if bool(options.get("local_files_only", False)):
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
         import torch
 
         from qrm.qrm_models import QRMRegistry
         from sd3_infer import SD3Inferencer
 
-        options = self.config.model.options
         checkpoint_value = options.get("checkpoint")
         if not checkpoint_value:
             raise ValueError("sd35_native requires [model].checkpoint")

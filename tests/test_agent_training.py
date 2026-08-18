@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
+from PIL import Image
 
 from qrm_diffusion.agents import (
     QualityCritic,
@@ -14,6 +16,7 @@ from qrm_diffusion.agents import (
 from qrm_diffusion.agents.state import TrajectoryEntry
 from qrm_diffusion.agents.training import ActorCriticUpdater
 from qrm_diffusion.agents.evaluation import evaluate_joint_gate
+from qrm_diffusion.agents.reward import CLIPReward
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +30,7 @@ def test_agent_toml_enables_schedule_training_but_not_joint_control() -> None:
     assert config.training.quality_critic
     assert config.training.timestep_policy
     assert not config.training.joint_controller
+    assert config.evaluation.required_repeats == 3
 
 
 def test_controller_checkpoint_round_trip(tmp_path: Path) -> None:
@@ -82,3 +86,44 @@ def test_joint_gate_requires_enough_prompts_and_consistent_improvement() -> None
     assert not smoke.passed
     passing = evaluate_joint_gate([0.01] * config.evaluation.min_prompts, config.evaluation)
     assert passing.passed
+
+
+def test_parti_training_and_heldout_splits_are_disjoint() -> None:
+    split_dir = ROOT / "configs/prompts/parti"
+    train = set((split_dir / "train.txt").read_text(encoding="utf-8").splitlines())
+    heldout = set((split_dir / "heldout.txt").read_text(encoding="utf-8").splitlines())
+    assert len(train) == 96
+    assert len(heldout) == 48
+    assert train.isdisjoint(heldout)
+
+
+def test_clip_reward_truncates_long_prompts(tmp_path: Path) -> None:
+    captured = {}
+
+    class Batch(dict):
+        def to(self, _device):
+            return self
+
+    class Processor:
+        def __call__(self, **kwargs):
+            captured.update(kwargs)
+            return Batch()
+
+    class Model:
+        config = SimpleNamespace(
+            text_config=SimpleNamespace(max_position_embeddings=77)
+        )
+
+        def __call__(self, **_kwargs):
+            embeddings = torch.tensor([[1.0, 0.0], [1.0, 0.0]])
+            return SimpleNamespace(image_embeds=embeddings, text_embeds=embeddings)
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (8, 8)).save(image_path)
+    reward = CLIPReward.__new__(CLIPReward)
+    reward.device = torch.device("cpu")
+    reward.processor = Processor()
+    reward.model = Model()
+    reward.score([image_path, image_path], ["word " * 100, "word " * 100])
+    assert captured["truncation"] is True
+    assert captured["max_length"] == 77

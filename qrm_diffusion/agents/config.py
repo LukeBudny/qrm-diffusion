@@ -66,6 +66,7 @@ class EvaluationSettings:
     min_prompts: int = 32
     min_mean_reward_delta: float = 0.0
     min_positive_fraction: float = 0.6
+    required_repeats: int = 3
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         min_positive_fraction=float(
             evaluation_data.get("min_positive_fraction", 0.6)
         ),
+        required_repeats=int(evaluation_data.get("required_repeats", 3)),
     )
 
     if int(data.get("schema_version", 0)) != 1:
@@ -175,7 +177,11 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         training.quality_critic and training.timestep_policy
     ):
         raise ValueError("joint_controller requires critic and timestep policy training")
-    if evaluation.min_prompts <= 0 or not 0 <= evaluation.min_positive_fraction <= 1:
+    if (
+        evaluation.min_prompts <= 0
+        or not 0 <= evaluation.min_positive_fraction <= 1
+        or evaluation.required_repeats <= 0
+    ):
         raise ValueError("Invalid evaluation gate settings")
 
     return AgentConfig(

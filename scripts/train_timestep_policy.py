@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import torch
@@ -15,9 +16,9 @@ from qrm_diffusion.agents import (
     save_controller_checkpoint,
 )
 from qrm_diffusion.agents.reward import create_reward
+from qrm_diffusion.agents.rollout import paired_schedule_rollout
 from qrm_diffusion.agents.training import ActorCriticUpdater
 from qrm_diffusion.backends import create_backend
-from qrm_diffusion.backends.base import GenerationRequest
 from qrm_diffusion.config import load_config
 from qrm_diffusion.memory import apply_cuda_memory_policy, cuda_memory_summary
 
@@ -38,24 +39,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     return parser.parse_args()
-
-
-def _request(config, prompt: str, path: Path, seed: int, sampler: str, trace=None):
-    extra = dict(config.generation.extra)
-    extra["sampler"] = sampler
-    if trace is not None:
-        extra["trajectory_trace"] = trace
-    return GenerationRequest(
-        prompt=prompt,
-        negative_prompt=config.generation.negative_prompt,
-        output_path=path,
-        width=config.generation.width,
-        height=config.generation.height,
-        steps=config.generation.steps,
-        guidance_scale=config.generation.guidance_scale,
-        seed=seed,
-        extra=extra,
-    )
 
 
 def main() -> int:
@@ -104,8 +87,9 @@ def main() -> int:
             {"params": critic.parameters(), "lr": agent.training.critic_learning_rate},
         ]
     )
+    resume_metadata = {}
     if args.resume:
-        load_controller_checkpoint(
+        resume_metadata = load_controller_checkpoint(
             args.resume, policy=policy, critic=critic, optimizer=optimizer, map_location=device
         )
     updater = ActorCriticUpdater(
@@ -125,41 +109,74 @@ def main() -> int:
         raise ValueError("No prompts were supplied")
     output_dir = config.resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = config.resolve_path(args.checkpoint)
+    metrics_path = output_dir / "training.jsonl"
     epochs = agent.training.epochs if args.epochs is None else args.epochs
+    start_epoch = int(resume_metadata.get("epoch", 0))
+    start_prompt = int(resume_metadata.get("next_prompt", 0))
+    if start_prompt >= len(prompts):
+        start_epoch += start_prompt // len(prompts)
+        start_prompt %= len(prompts)
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         for index, prompt in enumerate(prompts):
+            if epoch == start_epoch and index < start_prompt:
+                continue
             seed = config.generation.seed + index
             reference_path = output_dir / f"e{epoch:03d}-{index:05d}-fixed.png"
             candidate_path = output_dir / f"e{epoch:03d}-{index:05d}-policy.png"
-            backend.set_controller(agent, None)
-            reference_sampler = (
-                "euler" if agent.sampler == "adaptive_euler" else "dpmpp_2m"
+            trace = paired_schedule_rollout(
+                backend,
+                config,
+                agent,
+                prompt=prompt,
+                seed=seed,
+                fixed_path=reference_path,
+                policy_path=candidate_path,
+                policy=ExplorationStepPolicy(policy, agent.policy.exploration_std),
             )
-            backend.generate(
-                _request(config, prompt, reference_path, seed, reference_sampler)
-            )
-            trace = []
-            backend.set_controller(
-                agent, ExplorationStepPolicy(policy, agent.policy.exploration_std)
-            )
-            backend.generate(
-                _request(config, prompt, candidate_path, seed, agent.sampler, trace)
-            )
-            if len(trace) != config.generation.steps:
-                raise RuntimeError("Adaptive rollout violated the fixed NFE budget")
             terminal_reward = reward.relative(candidate_path, reference_path, prompt)
             metrics = updater.update(trace, terminal_reward)
+            record = {
+                "epoch": epoch,
+                "prompt_index": index,
+                "seed": seed,
+                "nfe": len(trace),
+                "reward": metrics.reward,
+                "policy_loss": metrics.policy_loss,
+                "critic_loss": metrics.critic_loss,
+                "entropy": metrics.entropy,
+            }
+            with metrics_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record) + "\n")
+            next_prompt = index + 1
+            save_controller_checkpoint(
+                checkpoint_path,
+                policy=policy,
+                critic=critic,
+                optimizer=optimizer,
+                metadata={
+                    "epoch": epoch,
+                    "next_prompt": next_prompt,
+                    "agent_config": str(agent.source),
+                    "prompts_file": str(prompt_path),
+                },
+            )
             print(
                 f"epoch={epoch} prompt={index} reward={metrics.reward:+.6f} "
                 f"policy_loss={metrics.policy_loss:+.6f} critic_loss={metrics.critic_loss:.6f}"
             )
         save_controller_checkpoint(
-            config.resolve_path(args.checkpoint),
+            checkpoint_path,
             policy=policy,
             critic=critic,
             optimizer=optimizer,
-            metadata={"epoch": epoch + 1, "agent_config": str(agent.source)},
+            metadata={
+                "epoch": epoch + 1,
+                "next_prompt": 0,
+                "agent_config": str(agent.source),
+                "prompts_file": str(prompt_path),
+            },
         )
         print(f"cuda_memory {cuda_memory_summary(config.memory.device)}")
     return 0

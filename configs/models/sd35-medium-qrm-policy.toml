@@ -9,37 +9,35 @@ expandable_segments = true
 
 [model]
 backend = "sd35_native"
-name = "sd35-medium"
+name = "sd35-medium-qrm-policy"
 checkpoint = "models/sd3.5_medium.safetensors"
 model_folder = "models"
 shift = 3.0
 text_encoder_device = "cpu"
 load_tokenizers = true
 local_files_only = true
-# Reward/vision encoders are unnecessary during baseline or QRM image generation.
 eval_model = "none"
 
 [generation]
 prompt = "A cinematic photograph of a mountain lake at sunrise."
 output_dir = "outputs"
-width = 1024
-height = 1024
-steps = 30
+width = 512
+height = 512
+steps = 25
 guidance_scale = 5.0
-seed = 42
+seed = 3505
 
 [generation.extra]
 sampler = "dpmpp_2m"
 
 [qrm]
-enabled = false
-checkpoint = "models/qrm_checkpoint/qrm_epoch25.pth"
+enabled = true
+checkpoint = "models/20251105_223451_QRMModulatorLatentV6_hps_rm_s1_25_steps_v3/qrmmlp_joint_epoch_25.pth"
 qrm_type = "QRMModulatorLatentV6"
-start_step = 25
-end_step = 47
+start_step = 1
+end_step = 24
 
 [controller]
 enabled = false
 config = "configs/agents/sd35-qrm-timestep.toml"
-# Set this to a trained controller checkpoint and enable the controller to use it.
 checkpoint = ""

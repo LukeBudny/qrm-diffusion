@@ -1,0 +1,68 @@
+{
+  "source": "PartiPrompts.tsv",
+  "source_sha256": "66b9d693fe1231fe2a9e7541c85a2a5814317a92f9fa183b770653b78e328f82",
+  "source_rows": 1632,
+  "unique_prompts": 1632,
+  "seed": 3505,
+  "method": "round-robin over Category x Challenge strata",
+  "train": {
+    "size": 96,
+    "categories": {
+      "Abstract": 3,
+      "Animals": 10,
+      "Artifacts": 10,
+      "Arts": 4,
+      "Food & Beverage": 9,
+      "Illustrations": 9,
+      "Indoor Scenes": 6,
+      "Outdoor Scenes": 10,
+      "People": 8,
+      "Produce & Plants": 8,
+      "Vehicles": 9,
+      "World Knowledge": 10
+    },
+    "challenges": {
+      "Basic": 12,
+      "Complex": 10,
+      "Fine-grained Detail": 11,
+      "Imagination": 10,
+      "Linguistic Structures": 6,
+      "Perspective": 9,
+      "Properties & Positioning": 3,
+      "Quantity": 9,
+      "Simple Detail": 9,
+      "Style & Format": 9,
+      "Writing & Symbols": 8
+    }
+  },
+  "heldout": {
+    "size": 48,
+    "categories": {
+      "Abstract": 1,
+      "Animals": 3,
+      "Artifacts": 4,
+      "Arts": 2,
+      "Food & Beverage": 5,
+      "Illustrations": 5,
+      "Indoor Scenes": 4,
+      "Outdoor Scenes": 2,
+      "People": 5,
+      "Produce & Plants": 6,
+      "Vehicles": 5,
+      "World Knowledge": 6
+    },
+    "challenges": {
+      "Basic": 6,
+      "Complex": 6,
+      "Fine-grained Detail": 5,
+      "Imagination": 4,
+      "Linguistic Structures": 5,
+      "Perspective": 1,
+      "Properties & Positioning": 2,
+      "Quantity": 4,
+      "Simple Detail": 7,
+      "Style & Format": 6,
+      "Writing & Symbols": 2
+    }
+  }
+}

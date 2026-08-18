@@ -26,3 +26,6 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 include = ["qrm", "qrm.*", "qrm_diffusion", "qrm_diffusion.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

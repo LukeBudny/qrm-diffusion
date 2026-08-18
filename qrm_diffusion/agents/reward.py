@@ -34,7 +34,12 @@ class CLIPReward:
             raise ValueError("Reward scoring requires equally sized, non-empty image/prompt lists")
         images = [Image.open(path).convert("RGB") for path in image_paths]
         inputs = self.processor(
-            text=list(prompts), images=images, return_tensors="pt", padding=True
+            text=list(prompts),
+            images=images,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.model.config.text_config.max_position_embeddings,
         ).to(self.device)
         outputs = self.model(**inputs)
         image = outputs.image_embeds / outputs.image_embeds.norm(dim=-1, keepdim=True)
