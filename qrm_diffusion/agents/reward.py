@@ -133,6 +133,7 @@ class CompositeReward:
         preference_weight: float,
         alignment_scale: float,
         preference_scale: float,
+        clip_value: float = 3.0,
     ) -> None:
         if alignment_weight < 0 or preference_weight < 0:
             raise ValueError("Composite reward weights must be non-negative")
@@ -140,6 +141,8 @@ class CompositeReward:
             raise ValueError("At least one composite reward weight must be positive")
         if alignment_scale <= 0 or preference_scale <= 0:
             raise ValueError("Composite reward scales must be positive")
+        if clip_value <= 0:
+            raise ValueError("Composite reward clip must be positive")
         weight_total = alignment_weight + preference_weight
         self.alignment = alignment
         self.preference = preference
@@ -147,6 +150,7 @@ class CompositeReward:
         self.preference_weight = preference_weight / weight_total
         self.alignment_scale = float(alignment_scale)
         self.preference_scale = float(preference_scale)
+        self.clip_value = float(clip_value)
 
     def relative_many_components(
         self,
@@ -160,21 +164,25 @@ class CompositeReward:
         preference = self.preference.relative_many(
             candidate_paths, reference_path, prompt
         )
-        return [
-            {
-                "alignment_delta": alignment_delta,
-                "preference_delta": preference_delta,
-                "reward": (
-                    self.alignment_weight
-                    * alignment_delta
-                    / self.alignment_scale
-                    + self.preference_weight
-                    * preference_delta
-                    / self.preference_scale
-                ),
-            }
-            for alignment_delta, preference_delta in zip(alignment, preference)
-        ]
+        results = []
+        for alignment_delta, preference_delta in zip(alignment, preference):
+            unclipped = (
+                self.alignment_weight
+                * alignment_delta
+                / self.alignment_scale
+                + self.preference_weight
+                * preference_delta
+                / self.preference_scale
+            )
+            results.append(
+                {
+                    "alignment_delta": alignment_delta,
+                    "preference_delta": preference_delta,
+                    "unclipped_reward": unclipped,
+                    "reward": max(-self.clip_value, min(self.clip_value, unclipped)),
+                }
+            )
+        return results
 
     def relative_many(
         self,
@@ -226,4 +234,5 @@ def create_reward(settings):
         preference_weight=settings.preference_weight,
         alignment_scale=settings.alignment_scale,
         preference_scale=settings.preference_scale,
+        clip_value=settings.composite_clip,
     )

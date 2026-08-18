@@ -43,6 +43,7 @@ class RewardSettings:
     preference_weight: float = 0.5
     alignment_scale: float = 4.0e-3
     preference_scale: float = 8.5e-2
+    composite_clip: float = 3.0
     preference_scorer: str = "image_reward"
     preference_device: str = "cpu"
     preference_checkpoint: str = "~/.cache/ImageReward/ImageReward.pt"
@@ -153,6 +154,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         preference_weight=float(reward_data.get("preference_weight", 0.5)),
         alignment_scale=float(reward_data.get("alignment_scale", 4.0e-3)),
         preference_scale=float(reward_data.get("preference_scale", 8.5e-2)),
+        composite_clip=float(reward_data.get("composite_clip", 3.0)),
         preference_scorer=str(
             reward_data.get("preference_scorer", "image_reward")
         ),
@@ -229,6 +231,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         or reward.alignment_weight + reward.preference_weight <= 0
         or reward.alignment_scale <= 0
         or reward.preference_scale <= 0
+        or reward.composite_clip <= 0
     ):
         raise ValueError("Invalid composite reward weights or scales")
     if training.joint_controller and not (

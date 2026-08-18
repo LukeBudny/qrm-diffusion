@@ -32,6 +32,7 @@ alignment_weight = 0.5
 preference_weight = 0.5
 alignment_scale = 4.0e-3
 preference_scale = 8.5e-2
+composite_clip = 3.0
 preference_scorer = "image_reward"
 preference_device = "cuda:0"
 preference_checkpoint = "~/.cache/ImageReward/ImageReward.pt"

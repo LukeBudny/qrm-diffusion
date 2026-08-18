@@ -190,12 +190,24 @@ def test_composite_reward_normalizes_alignment_and_preference_deltas() -> None:
         preference_weight=0.5,
         alignment_scale=0.005,
         preference_scale=0.1,
+        clip_value=3.0,
     )
     components = reward.relative_many_components(["a", "b"], "fixed", "prompt")
     assert components[0]["reward"] == 1.0
     assert components[1]["reward"] == -0.25
     assert components[0]["alignment_delta"] == 0.005
     assert components[0]["preference_delta"] == 0.1
+    clipped = CompositeReward(
+        Scorer([0.05]),
+        Scorer([1.0]),
+        alignment_weight=0.5,
+        preference_weight=0.5,
+        alignment_scale=0.005,
+        preference_scale=0.1,
+        clip_value=3.0,
+    ).relative_many_components(["a"], "fixed", "prompt")[0]
+    assert clipped["unclipped_reward"] == 10.0
+    assert clipped["reward"] == 3.0
 
 
 def test_batched_actor_critic_normalizes_and_regularizes() -> None:
