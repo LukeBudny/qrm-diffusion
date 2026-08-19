@@ -97,35 +97,38 @@ quality values, and QRM modulation norms. QRM activation is expressed as a
 sigma region in the adaptive path, not a mutable loop index.
 
 `configs/agents/sd35-qrm-timestep.toml` records the initial controller bounds
-and the policy, critic, reward, training, and evaluation-gate settings. Schedule
-parity has been revalidated, so critic and timestep-policy training are enabled;
-joint schedule/QRM control remains disabled until the equal-NFE evaluation gate
-passes.
+and the actor-critic baseline. The critic-free ablation configurations are
+`sd35-qrm-timestep-standardized.toml` and `sd35-qrm-timestep-rank.toml`.
+Schedule parity has been revalidated; joint schedule/QRM control remains
+disabled until the equal-NFE evaluation gate passes.
 
 To use a trained deterministic policy for native inference, enable
 `[controller]` in the SD3.5 model TOML and set its checkpoint. A missing
 checkpoint constructs the exact zero-initialized policy. Controller checkpoints
 contain versioned policy/critic states and optional optimizer metadata.
 
-Train only the timestep actor and quality critic while SD3.5 and QRM remain
-frozen:
+Train the critic-free rank policy while SD3.5 and QRM remain frozen:
 
 ```bash
 python scripts/train_timestep_policy.py \
   --config configs/models/sd35-medium-qrm-policy.toml \
-  --prompts-file configs/prompts/parti/train.txt \
-  --validation-prompts-file configs/prompts/parti/validation.txt \
-  --checkpoint outputs/controller-checkpoints/parti-policy.pt \
-  --best-checkpoint outputs/controller-checkpoints/parti-policy-best.pt
+  --agent-config configs/agents/sd35-qrm-timestep-rank.toml \
+  --prompts-file configs/prompts/parti-v2/train.txt \
+  --validation-prompts-file configs/prompts/parti-v2/validation.txt \
+  --checkpoint outputs/controller-checkpoints/parti-rank-policy.pt \
+  --best-checkpoint outputs/controller-checkpoints/parti-rank-policy-best.pt
 ```
 
 Training renders several independently explored candidate schedules per prompt,
-then performs one normalized-advantage actor-critic update over several prompt
-groups. Mean-action and KL-to-zero-policy penalties keep the learned schedule
-near the exact-parity baseline. A disjoint validation split is evaluated at the
-configured interval, and only the best validation-mean checkpoint is promoted.
-Both training and validation are resumable and append detailed trajectory
-diagnostics under `outputs/`.
+then computes standardized or rank advantages independently within each prompt
+group. The advantage is applied to the complete sampled action sequence without
+a learned critic. The actor-critic baseline remains available by selecting the
+original agent TOML. Mean-action and KL-to-zero-policy penalties keep the
+learned schedule near the exact-parity baseline. A disjoint validation split is
+evaluated over every configured seed offset; a checkpoint is eligible only when
+every validation repeat clears the mean and positive-fraction thresholds. Both
+training and validation append detailed trajectory diagnostics under `outputs/`,
+and completed optimizer batches are resumable from the latest checkpoint.
 
 Compare a learned schedule against its matching fixed solver at exactly the
 same NFE budget:
@@ -153,12 +156,19 @@ python scripts/diagnose_timestep_policy.py \
   --output outputs/timestep-policy-comparison/diagnostics.json
 ```
 
-The first 96-prompt CLIP-only policy did not pass the held-out gate, so joint
-schedule/QRM control remains disabled. Its 48-prompt replay showed a bootstrap
-interval crossing zero and a critic that performed worse than a constant-mean
-predictor. The batched, regularized method above replaces that training path;
-it must still pass every configured held-out repeat before joint control is
-implemented.
+The actor-critic policies did not pass the held-out gate, so joint schedule/QRM
+control remains disabled. The latest 48-prompt evaluation scored a 50% positive
+fraction and its critic performed worse than a constant-mean predictor. The
+critic-free within-prompt ablation above replaces that training path; it must
+still pass every configured held-out repeat before joint control is implemented.
+
+A controlled 64-train/32-validation ablation with the existing six policy
+features also failed the two-seed validation gate. Standardized K=4 scored
+(-0.0779, 46.9%) and (-0.0209, 37.5%); rank K=4 improved to (+0.1925, 56.2%)
+and (+0.0772, 59.4%); rank K=8 scored (-0.0481, 53.1%) and (+0.0165, 46.9%).
+No critic-free checkpoint was promoted. Rank K=4 is the strongest of these
+methods, but richer prompt/QRM state features are required before scaling the
+training set or running another held-out gate.
 
 Run a Diffusers model:
 

@@ -64,6 +64,8 @@ class TrainingSettings:
     quality_critic: bool = False
     timestep_policy: bool = False
     joint_controller: bool = False
+    advantage_mode: str = "standardized"
+    advantage_reward_key: str = "reward"
     policy_learning_rate: float = 1.0e-4
     critic_learning_rate: float = 3.0e-4
     entropy_weight: float = 1.0e-3
@@ -75,6 +77,7 @@ class TrainingSettings:
     max_grad_norm: float = 1.0
     validation_interval_prompts: int = 32
     validation_max_prompts: int = 32
+    validation_seed_offsets: tuple[int, ...] = (500_000,)
     epochs: int = 1
 
 
@@ -179,10 +182,20 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             diagnostics_data.get("record_modulation_norm", True)
         ),
     )
+    quality_critic_enabled = bool(training_data.get("quality_critic", False))
     training = TrainingSettings(
-        quality_critic=bool(training_data.get("quality_critic", False)),
+        quality_critic=quality_critic_enabled,
         timestep_policy=bool(training_data.get("timestep_policy", False)),
         joint_controller=bool(training_data.get("joint_controller", False)),
+        advantage_mode=str(
+            training_data.get(
+                "advantage_mode",
+                "critic" if quality_critic_enabled else "standardized",
+            )
+        ),
+        advantage_reward_key=str(
+            training_data.get("advantage_reward_key", "reward")
+        ),
         policy_learning_rate=float(training_data.get("policy_learning_rate", 1.0e-4)),
         critic_learning_rate=float(training_data.get("critic_learning_rate", 3.0e-4)),
         entropy_weight=float(training_data.get("entropy_weight", 1.0e-3)),
@@ -196,6 +209,10 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             training_data.get("validation_interval_prompts", 32)
         ),
         validation_max_prompts=int(training_data.get("validation_max_prompts", 32)),
+        validation_seed_offsets=tuple(
+            int(value)
+            for value in training_data.get("validation_seed_offsets", [500_000])
+        ),
         epochs=int(training_data.get("epochs", 1)),
     )
     evaluation = EvaluationSettings(
@@ -238,6 +255,19 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         training.quality_critic and training.timestep_policy
     ):
         raise ValueError("joint_controller requires critic and timestep policy training")
+    if training.advantage_mode not in {"critic", "standardized", "rank"}:
+        raise ValueError("advantage_mode must be critic, standardized, or rank")
+    if training.quality_critic != (training.advantage_mode == "critic"):
+        raise ValueError(
+            "quality_critic must be true exactly when advantage_mode='critic'"
+        )
+    if training.advantage_reward_key not in {
+        "reward",
+        "unclipped_reward",
+        "alignment_delta",
+        "preference_delta",
+    }:
+        raise ValueError("Unsupported advantage_reward_key")
     if (
         training.candidates_per_prompt < 2
         or training.batch_prompts <= 0
@@ -246,6 +276,10 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         or training.max_grad_norm <= 0
         or training.validation_interval_prompts <= 0
         or training.validation_max_prompts <= 0
+        or not training.validation_seed_offsets
+        or len(set(training.validation_seed_offsets)) != len(
+            training.validation_seed_offsets
+        )
     ):
         raise ValueError("Invalid batched training settings")
     if (

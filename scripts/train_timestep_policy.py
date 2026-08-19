@@ -19,7 +19,8 @@ from qrm_diffusion.agents import (
 from qrm_diffusion.agents.reward import create_reward
 from qrm_diffusion.agents.rollout import grouped_schedule_rollout
 from qrm_diffusion.agents.diagnostics import trajectory_diagnostics
-from qrm_diffusion.agents.training import ActorCriticUpdater
+from qrm_diffusion.agents.evaluation import evaluate_joint_gate
+from qrm_diffusion.agents.training import ActorCriticUpdater, PolicyGradientUpdater
 from qrm_diffusion.backends import create_backend
 from qrm_diffusion.config import load_config
 from qrm_diffusion.memory import apply_cuda_memory_policy, cuda_memory_summary
@@ -97,8 +98,8 @@ def main() -> int:
         raise ValueError("Training and validation CLI overrides must be positive")
     if config.model.backend != "sd35_native":
         raise ValueError("Timestep-policy training requires backend='sd35_native'")
-    if not agent.training.quality_critic or not agent.training.timestep_policy:
-        raise ValueError("Enable quality_critic and timestep_policy in the agent TOML")
+    if not agent.training.timestep_policy:
+        raise ValueError("Enable timestep_policy in the agent TOML")
     if agent.training.joint_controller:
         raise ValueError("Joint control remains gated; disable joint_controller for this stage")
 
@@ -121,28 +122,46 @@ def main() -> int:
 
     device = torch.device(f"cuda:{config.memory.device}")
     policy = create_policy(agent, device=device)
-    critic = QualityCritic(agent.critic.hidden_dim).to(device)
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": policy.parameters(), "lr": agent.training.policy_learning_rate},
-            {"params": critic.parameters(), "lr": agent.training.critic_learning_rate},
-        ]
+    critic = (
+        QualityCritic(agent.critic.hidden_dim).to(device)
+        if agent.training.quality_critic
+        else None
     )
+    parameter_groups = [
+        {"params": policy.parameters(), "lr": agent.training.policy_learning_rate}
+    ]
+    if critic is not None:
+        parameter_groups.append(
+            {"params": critic.parameters(), "lr": agent.training.critic_learning_rate}
+        )
+    optimizer = torch.optim.AdamW(parameter_groups)
     resume_metadata = {}
     if args.resume:
         resume_metadata = load_controller_checkpoint(
             args.resume, policy=policy, critic=critic, optimizer=optimizer, map_location=device
         )
-    updater = ActorCriticUpdater(
-        policy,
-        critic,
-        optimizer,
-        exploration_std=agent.policy.exploration_std,
-        entropy_weight=agent.training.entropy_weight,
-        action_l2_weight=agent.training.action_l2_weight,
-        kl_weight=agent.training.kl_weight,
-        max_grad_norm=agent.training.max_grad_norm,
-    )
+    if critic is not None:
+        updater = ActorCriticUpdater(
+            policy,
+            critic,
+            optimizer,
+            exploration_std=agent.policy.exploration_std,
+            entropy_weight=agent.training.entropy_weight,
+            action_l2_weight=agent.training.action_l2_weight,
+            kl_weight=agent.training.kl_weight,
+            max_grad_norm=agent.training.max_grad_norm,
+        )
+    else:
+        updater = PolicyGradientUpdater(
+            policy,
+            optimizer,
+            exploration_std=agent.policy.exploration_std,
+            advantage_mode=agent.training.advantage_mode,
+            entropy_weight=agent.training.entropy_weight,
+            action_l2_weight=agent.training.action_l2_weight,
+            kl_weight=agent.training.kl_weight,
+            max_grad_norm=agent.training.max_grad_norm,
+        )
     reward = create_reward(agent.reward)
 
     prompt_path = Path(args.prompts_file).expanduser().resolve()
@@ -192,57 +211,82 @@ def main() -> int:
             "next_prompt": next_prompt,
             "update_index": update_index,
             "best_validation_mean": best_validation_mean,
+            "advantage_mode": agent.training.advantage_mode,
+            "advantage_reward_key": agent.training.advantage_reward_key,
             "agent_config": str(agent.source),
             "prompts_file": str(prompt_path),
             "validation_prompts_file": str(validation_path),
         }
 
-    def validate_policy(epoch: int, trained_prompts: int) -> tuple[float, float]:
+    def validate_policy(epoch: int, trained_prompts: int) -> list[dict]:
         validation_dir = output_dir / "validation" / f"u{update_index:05d}"
-        deltas = []
-        for validation_index, validation_prompt in enumerate(validation_prompts):
-            seed = config.generation.seed + 500_000 + validation_index
-            fixed_path = validation_dir / f"{validation_index:05d}-fixed.png"
-            candidate_path = validation_dir / f"{validation_index:05d}-policy.png"
-            reference_trace, traces = grouped_schedule_rollout(
-                backend,
-                config,
-                agent,
-                prompt=validation_prompt,
-                seed=seed,
-                fixed_path=fixed_path,
-                candidate_paths=[candidate_path],
-                policies=[policy],
-            )
-            reward_components = reward.relative_many_components(
-                [candidate_path], fixed_path, validation_prompt
-            )[0]
-            delta = reward_components["reward"]
-            deltas.append(delta)
-            with validation_metrics_path.open("a", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps(
-                        {
-                            "epoch": epoch,
-                            "trained_prompts": trained_prompts,
-                            "update_index": update_index,
-                            "prompt_index": validation_index,
-                            "seed": seed,
-                            "nfe": len(traces[0]),
-                            "reward_delta": delta,
-                            "reward_components": reward_components,
-                            "trajectory": trajectory_diagnostics(
-                                traces[0], reference_trace, critic=critic
-                            ),
-                        }
-                    )
-                    + "\n"
+        summaries = []
+        for repeat_index, seed_offset in enumerate(
+            agent.training.validation_seed_offsets
+        ):
+            deltas = []
+            repeat_dir = validation_dir / f"repeat-{repeat_index:02d}"
+            for validation_index, validation_prompt in enumerate(validation_prompts):
+                seed = config.generation.seed + seed_offset + validation_index
+                fixed_path = repeat_dir / f"{validation_index:05d}-fixed.png"
+                candidate_path = repeat_dir / f"{validation_index:05d}-policy.png"
+                reference_trace, traces = grouped_schedule_rollout(
+                    backend,
+                    config,
+                    agent,
+                    prompt=validation_prompt,
+                    seed=seed,
+                    fixed_path=fixed_path,
+                    candidate_paths=[candidate_path],
+                    policies=[policy],
                 )
-        return mean(deltas), sum(value > 0 for value in deltas) / len(deltas)
+                reward_components = reward.relative_many_components(
+                    [candidate_path], fixed_path, validation_prompt
+                )[0]
+                delta = reward_components["reward"]
+                deltas.append(delta)
+                with validation_metrics_path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            {
+                                "epoch": epoch,
+                                "trained_prompts": trained_prompts,
+                                "update_index": update_index,
+                                "validation_repeat": repeat_index,
+                                "seed_offset": seed_offset,
+                                "prompt_index": validation_index,
+                                "seed": seed,
+                                "nfe": len(traces[0]),
+                                "reward_delta": delta,
+                                "reward_components": reward_components,
+                                "trajectory": trajectory_diagnostics(
+                                    traces[0], reference_trace, critic=critic
+                                ),
+                            }
+                        )
+                        + "\n"
+                    )
+            result = evaluate_joint_gate(deltas, agent.evaluation)
+            summary = {
+                "validation_repeat": repeat_index,
+                "seed_offset": seed_offset,
+                "passed": result.passed,
+                "mean_reward_delta": result.mean_reward_delta,
+                "positive_fraction": result.positive_fraction,
+            }
+            summaries.append(summary)
+            print(
+                f"validation repeat={repeat_index} prompts={len(validation_prompts)} "
+                f"mean={result.mean_reward_delta:+.6f} "
+                f"positive={result.positive_fraction:.3f} "
+                f"gate={'PASS' if result.passed else 'FAIL'}"
+            )
+        return summaries
 
     for epoch in range(start_epoch, epochs):
         pending_trajectories = []
         pending_rewards = []
+        pending_group_ids = []
         pending_records = []
         pending_prompt_count = 0
         for index, prompt in enumerate(prompts):
@@ -281,12 +325,16 @@ def main() -> int:
             reward_components = reward.relative_many_components(
                 candidate_paths, reference_path, prompt
             )
-            terminal_rewards = [item["reward"] for item in reward_components]
+            terminal_rewards = [
+                item.get(agent.training.advantage_reward_key, item["reward"])
+                for item in reward_components
+            ]
             for candidate, (trace, terminal_reward) in enumerate(
                 zip(traces, terminal_rewards)
             ):
                 pending_trajectories.append(trace)
                 pending_rewards.append(terminal_reward)
+                pending_group_ids.append((epoch, index))
                 pending_records.append(
                     {
                         "epoch": epoch,
@@ -294,7 +342,8 @@ def main() -> int:
                         "candidate_index": candidate,
                         "seed": seed,
                         "nfe": len(trace),
-                        "reward": terminal_reward,
+                        "reward": reward_components[candidate]["reward"],
+                        "training_reward": terminal_reward,
                         "reward_components": reward_components[candidate],
                         "trajectory": trajectory_diagnostics(
                             trace, reference_trace, critic=critic
@@ -309,11 +358,18 @@ def main() -> int:
             )
             if not should_update:
                 continue
-            metrics = updater.update_batch(
-                pending_trajectories,
-                pending_rewards,
-                normalize_advantages=agent.training.normalize_advantages,
-            )
+            if critic is not None:
+                metrics = updater.update_batch(
+                    pending_trajectories,
+                    pending_rewards,
+                    normalize_advantages=agent.training.normalize_advantages,
+                )
+            else:
+                metrics = updater.update_batch(
+                    pending_trajectories,
+                    pending_rewards,
+                    group_ids=pending_group_ids,
+                )
             update_index += 1
             batch_metrics = asdict(metrics)
             with metrics_path.open("a", encoding="utf-8") as handle:
@@ -324,11 +380,13 @@ def main() -> int:
             print(
                 f"epoch={epoch} prompts_through={index} candidates={len(pending_rewards)} "
                 f"reward={metrics.reward_mean:+.6f}+/-{metrics.reward_std:.6f} "
-                f"policy_loss={metrics.policy_loss:+.6f} critic_loss={metrics.critic_loss:.6f} "
+                f"mode={metrics.advantage_mode} policy_loss={metrics.policy_loss:+.6f} "
+                f"critic_loss={'off' if metrics.critic_loss is None else f'{metrics.critic_loss:.6f}'} "
                 f"kl={metrics.policy_kl:.6f}"
             )
             pending_trajectories.clear()
             pending_rewards.clear()
+            pending_group_ids.clear()
             pending_records.clear()
             pending_prompt_count = 0
             # Persist the completed optimizer update before the more expensive
@@ -344,14 +402,14 @@ def main() -> int:
                 next_prompt % agent.training.validation_interval_prompts == 0
                 or next_prompt == len(prompts)
             ):
-                validation_mean, validation_positive = validate_policy(
-                    epoch, next_prompt
+                validation_summaries = validate_policy(epoch, next_prompt)
+                validation_mean = mean(
+                    item["mean_reward_delta"] for item in validation_summaries
                 )
-                print(
-                    f"validation prompts={len(validation_prompts)} "
-                    f"mean={validation_mean:+.6f} positive={validation_positive:.3f}"
+                validation_passed = all(
+                    item["passed"] for item in validation_summaries
                 )
-                if validation_mean > best_validation_mean:
+                if validation_passed and validation_mean > best_validation_mean:
                     best_validation_mean = validation_mean
                     save_controller_checkpoint(
                         best_checkpoint_path,
@@ -361,6 +419,8 @@ def main() -> int:
                         metadata=checkpoint_metadata(epoch, next_prompt),
                     )
                     print(f"new_best_checkpoint={best_checkpoint_path}")
+                elif not validation_passed:
+                    print("checkpoint_not_eligible=validation_consistency_gate")
                 save_controller_checkpoint(
                     checkpoint_path,
                     policy=policy,

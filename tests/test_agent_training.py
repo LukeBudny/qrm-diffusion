@@ -17,7 +17,11 @@ from qrm_diffusion.agents import (
     save_controller_checkpoint,
 )
 from qrm_diffusion.agents.state import TrajectoryEntry
-from qrm_diffusion.agents.training import ActorCriticUpdater
+from qrm_diffusion.agents.training import (
+    ActorCriticUpdater,
+    PolicyGradientUpdater,
+    within_prompt_advantages,
+)
 from qrm_diffusion.agents.evaluation import evaluate_joint_gate
 from qrm_diffusion.agents.reward import CLIPReward, CompositeReward
 from qrm_diffusion.agents.diagnostics import summarize_policy_records
@@ -32,6 +36,7 @@ def test_agent_toml_enables_schedule_training_but_not_joint_control() -> None:
     assert config.sampler == "adaptive_dpmpp_2m"
     assert config.schedule.fixed_nfe
     assert config.training.quality_critic
+    assert config.training.advantage_mode == "critic"
     assert config.training.timestep_policy
     assert not config.training.joint_controller
     assert config.evaluation.required_repeats == 3
@@ -42,6 +47,19 @@ def test_agent_toml_enables_schedule_training_but_not_joint_control() -> None:
     assert config.training.kl_weight > 0
     assert config.reward.scorer == "composite"
     assert config.reward.preference_scorer == "image_reward"
+
+
+def test_critic_free_agent_configs_use_two_validation_seed_sets() -> None:
+    for name, mode in (
+        ("sd35-qrm-timestep-standardized.toml", "standardized"),
+        ("sd35-qrm-timestep-rank.toml", "rank"),
+    ):
+        config = load_agent_config(ROOT / "configs/agents" / name)
+        assert not config.training.quality_critic
+        assert config.training.timestep_policy
+        assert config.training.advantage_mode == mode
+        assert config.training.advantage_reward_key == "unclipped_reward"
+        assert config.training.validation_seed_offsets == (500_000, 510_000)
 
 
 def test_controller_checkpoint_round_trip(tmp_path: Path) -> None:
@@ -259,6 +277,70 @@ def test_batched_actor_critic_normalizes_and_regularizes() -> None:
     assert metrics.advantage_std > 0
     assert metrics.action_l2 > 0
     assert metrics.policy_kl > 0
+
+
+def test_within_prompt_advantages_are_centered_per_prompt() -> None:
+    rewards = [1.0, 4.0, 2.0, 3.0, -5.0, -5.0, 10.0, 0.0]
+    groups = ["first"] * 4 + ["second"] * 4
+    standardized = within_prompt_advantages(
+        rewards, groups, mode="standardized"
+    )
+    ranked = within_prompt_advantages(rewards, groups, mode="rank")
+    for values in (standardized, ranked):
+        assert abs(sum(values[:4])) < 1.0e-7
+        assert abs(sum(values[4:])) < 1.0e-7
+    assert ranked[1] > ranked[3] > ranked[2] > ranked[0]
+    assert ranked[4] == ranked[5]
+    assert ranked[6] > ranked[7] > ranked[4]
+
+
+def test_critic_free_sequence_update_changes_only_policy() -> None:
+    torch.manual_seed(2)
+    policy = RecedingHorizonStepPolicy(hidden_dim=8)
+    optimizer = torch.optim.Adam(policy.parameters(), lr=1.0e-2)
+    updater = PolicyGradientUpdater(
+        policy,
+        optimizer,
+        exploration_std=0.2,
+        advantage_mode="rank",
+        entropy_weight=0.0,
+        action_l2_weight=0.01,
+        kl_weight=0.01,
+    )
+    trajectories = []
+    for candidate in range(4):
+        trajectories.append(
+            [
+                TrajectoryEntry(
+                    step_index=step,
+                    sigma=1.0 / (step + 1),
+                    next_sigma=0.5 / (step + 1),
+                    step_size=0.1,
+                    action=-0.2 + candidate * 0.1 + step * 0.01,
+                    policy_features=(
+                        0.1 * candidate,
+                        0.2,
+                        0.3,
+                        float(step),
+                        0.5,
+                        0.1,
+                    ),
+                )
+                for step in range(3)
+            ]
+        )
+    before = policy.output.bias.detach().clone()
+    metrics = updater.update_batch(
+        trajectories,
+        [-0.2, 0.3, -0.05, 0.1],
+        group_ids=[0, 0, 0, 0],
+    )
+    assert metrics.advantage_mode == "rank"
+    assert metrics.critic_loss is None
+    assert metrics.critic_prediction_mean is None
+    assert abs(metrics.advantage_mean) < 1.0e-7
+    assert metrics.advantage_std > 0
+    assert not torch.equal(policy.output.bias.detach(), before)
 
 
 def test_candidate_exploration_uses_independent_seeded_rng_streams() -> None:

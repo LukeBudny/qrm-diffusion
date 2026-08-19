@@ -1,5 +1,5 @@
 schema_version = 1
-name = "sd35-qrm-fixed-budget-controller"
+name = "sd35-qrm-critic-free-standardized"
 architecture = "sd35_native"
 sampler = "adaptive_dpmpp_2m"
 
@@ -45,14 +45,12 @@ record_step_size = true
 record_quality = true
 record_modulation_norm = true
 
-# Schedule parity has passed. Critic/policy training may now run with the
-# backbone and QRM frozen; joint control remains gated on equal-NFE evaluation.
 [training]
-quality_critic = true
+quality_critic = false
 timestep_policy = true
 joint_controller = false
-advantage_mode = "critic"
-advantage_reward_key = "reward"
+advantage_mode = "standardized"
+advantage_reward_key = "unclipped_reward"
 policy_learning_rate = 1.0e-4
 critic_learning_rate = 3.0e-4
 entropy_weight = 1.0e-3
@@ -64,7 +62,7 @@ kl_weight = 1.0e-3
 max_grad_norm = 1.0
 validation_interval_prompts = 64
 validation_max_prompts = 32
-validation_seed_offsets = [500000]
+validation_seed_offsets = [500000, 510000]
 epochs = 1
 
 [evaluation]
