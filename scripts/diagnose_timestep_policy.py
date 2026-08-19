@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-metadata")
     parser.add_argument("--output", required=True)
     parser.add_argument("--repeat", type=int)
+    parser.add_argument("--update-index", type=int)
     parser.add_argument("--bootstrap-samples", type=int, default=2000)
     parser.add_argument("--bootstrap-confidence", type=float, default=0.95)
     return parser.parse_args()
@@ -31,6 +32,12 @@ def main() -> int:
     records = _read_jsonl(args.evaluation_jsonl)
     if args.repeat is not None:
         records = [record for record in records if int(record.get("repeat", 0)) == args.repeat]
+    if args.update_index is not None:
+        records = [
+            record
+            for record in records
+            if int(record.get("update_index", -1)) == args.update_index
+        ]
     if args.prompt_metadata:
         metadata = {
             int(item["prompt_index"]): item for item in _read_jsonl(args.prompt_metadata)
