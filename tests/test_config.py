@@ -1,4 +1,5 @@
 from pathlib import Path
+import tempfile
 import unittest
 
 from qrm_diffusion.config import PROJECT_MAX_VRAM_GIB, load_config
@@ -26,6 +27,24 @@ class ConfigTests(unittest.TestCase):
         config = load_config(ROOT / "configs/models/sdxl-base.toml")
         self.assertEqual(config.model.backend, "diffusers")
         self.assertFalse(config.qrm.enabled)
+
+    def test_qrm_requires_native_sd35_backend(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "invalid-qrm-backend.toml"
+            config_path.write_text(
+                """
+[model]
+backend = "diffusers"
+
+[qrm]
+enabled = true
+checkpoint = "qrm.pth"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "sd35_native"):
+                load_config(config_path)
 
 
 if __name__ == "__main__":

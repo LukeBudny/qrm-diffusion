@@ -149,6 +149,8 @@ def load_config(path: str | Path) -> ProjectConfig:
         raise ValueError("Generation width and height must be divisible by 8")
     if generation.steps <= 0:
         raise ValueError("[generation].steps must be greater than zero")
+    if qrm.enabled and backend != "sd35_native":
+        raise ValueError("QRM is currently supported only with [model].backend='sd35_native'")
     if qrm.enabled and not qrm.checkpoint:
         raise ValueError("[qrm].checkpoint is required when QRM is enabled")
     if controller.enabled and not controller.config:
